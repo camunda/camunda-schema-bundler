@@ -75,10 +75,11 @@ export async function fetchSpec(options: FetchOptions): Promise<FetchResult> {
     const run = (args: string[]) =>
       execFileSync(args[0], args.slice(1), { stdio: 'pipe', timeout: 120_000 });
 
-    run(['git', 'clone', '--depth', '1', '--filter=blob:none', '--sparse', repoUrl, tmpDir]);
+    run(['git', 'clone', '--depth', '1', '--branch', ref, '--filter=blob:none', '--sparse', repoUrl, tmpDir]);
     run(['git', '-C', tmpDir, 'sparse-checkout', 'init', '--no-cone']);
     run(['git', '-C', tmpDir, 'sparse-checkout', 'set', `/${specDir}`]);
-    run(['git', '-C', tmpDir, 'checkout', ref]);
+    // Force checkout to populate tree with sparse-checkout patterns
+    run(['git', '-C', tmpDir, 'checkout']);
 
     const sourceDir = resolve(tmpDir, specDir);
     const sourceEntry = resolve(sourceDir, entryFile);
