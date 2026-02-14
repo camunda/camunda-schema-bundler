@@ -1,3 +1,10 @@
+## [1.1.2](https://github.com/camunda/camunda-schema-bundler/compare/v1.1.1...v1.1.2) (2026-02-14)
+
+
+### Bug Fixes
+
+* support git refs correctly ([5b09fdc](https://github.com/camunda/camunda-schema-bundler/commit/5b09fdc7cf14bf27e5814bc60a80fcfde8a8169d))
+
 ## [1.1.1](https://github.com/camunda/camunda-schema-bundler/compare/v1.1.0...v1.1.1) (2026-02-14)
 
 
