@@ -25,11 +25,13 @@
 import path from 'node:path';
 import { bundle } from './bundle.js';
 import { fetchSpec, DEFAULT_SPEC_DIR } from './fetch.js';
+import { detectUpstreamRef } from './detect-ref.js';
 
 interface CliArgs {
   fetch: boolean;
   specDir?: string;
   ref?: string;
+  autoRef: boolean;
   repoUrl?: string;
   outputDir?: string;
   entryFile?: string;
@@ -44,6 +46,7 @@ interface CliArgs {
 function parseArgs(argv: string[]): CliArgs {
   const args: CliArgs = {
     fetch: false,
+    autoRef: false,
     derefPathLocal: false,
     allowLikeRefs: false,
     skipFetchIfExists: false,
@@ -60,6 +63,9 @@ function parseArgs(argv: string[]): CliArgs {
         break;
       case '--ref':
         args.ref = argv[++i];
+        break;
+      case '--auto-ref':
+        args.autoRef = true;
         break;
       case '--repo-url':
         args.repoUrl = argv[++i];
@@ -111,6 +117,8 @@ Modes:
 
 Fetch options:
   --ref <ref>               Git ref to fetch (branch/tag/SHA, default: main)
+  --auto-ref                Auto-detect ref from current git branch:
+                              main → main, stable/* → stable/*, other → main
   --repo-url <url>          Git repo URL (default: https://github.com/camunda/camunda.git)
   --output-dir <path>       Local dir for fetched spec (default: external-spec/upstream/...)
   --skip-fetch-if-exists    Skip fetch if the entry file already exists locally
@@ -141,6 +149,10 @@ Examples:
   # Bundle with path-local deref (for C# / Microsoft.OpenApi)
   camunda-schema-bundler --deref-path-local \\
     --output-spec external-spec/bundled/rest-api.bundle.json
+
+  # Auto-detect upstream ref from current git branch
+  camunda-schema-bundler --auto-ref \\
+    --output-spec external-spec/bundled/rest-api.bundle.json
 `.trim();
 
 async function main(): Promise<void> {
@@ -157,17 +169,28 @@ async function main(): Promise<void> {
     // Use existing local spec directory
     specDir = args.specDir;
   } else {
+    // Resolve the ref: explicit --ref > --auto-ref > default "main"
+    let ref = args.ref;
+    if (!ref && args.autoRef) {
+      const detected = detectUpstreamRef();
+      console.log(
+        `[camunda-schema-bundler] Auto-ref (${detected.source}): ${detected.ref}` +
+          (detected.branch ? ` (branch: ${detected.branch})` : '')
+      );
+      ref = detected.ref;
+    }
+
     // Fetch mode (explicit --fetch or default when no --spec-dir)
     const outputDir =
       args.outputDir ??
       path.join('external-spec', 'upstream', DEFAULT_SPEC_DIR);
 
     console.log(
-      `[camunda-schema-bundler] Fetching spec (ref: ${args.ref ?? 'main'})...`
+      `[camunda-schema-bundler] Fetching spec (ref: ${ref ?? 'main'})...`
     );
 
     const fetchResult = await fetchSpec({
-      ref: args.ref,
+      ref,
       repoUrl: args.repoUrl,
       outputDir,
       entryFile: args.entryFile,

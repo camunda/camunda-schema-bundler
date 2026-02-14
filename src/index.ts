@@ -7,6 +7,7 @@
 export { bundle } from './bundle.js';
 export { fetchSpec } from './fetch.js';
 export { fetchAndBundle } from './fetch-and-bundle.js';
+export { detectUpstreamRef } from './detect-ref.js';
 export type {
   BundleOptions,
   BundleResult,
