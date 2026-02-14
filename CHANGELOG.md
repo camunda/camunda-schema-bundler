@@ -1,3 +1,10 @@
+# [1.2.0](https://github.com/camunda/camunda-schema-bundler/compare/v1.1.2...v1.2.0) (2026-02-14)
+
+
+### Features
+
+* materialize inline schemas ([9b279b9](https://github.com/camunda/camunda-schema-bundler/commit/9b279b982f1a80a122a5700bf66ceedeee6276c2))
+
 ## [1.1.2](https://github.com/camunda/camunda-schema-bundler/compare/v1.1.1...v1.1.2) (2026-02-14)
 
 
