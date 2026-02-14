@@ -87,6 +87,8 @@ export interface BundleStats {
   pathCount: number;
   schemaCount: number;
   augmentedSchemaCount: number;
+  promotedInlineSchemaCount: number;
+  freshDedupCount: number;
   dereferencedPathLocalRefCount: number;
   pathLocalLikeRefCount: number;
 }

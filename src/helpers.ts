@@ -148,6 +148,31 @@ export function canonicalStringify(obj: unknown): string {
 }
 
 /**
+ * Strip metadata fields (description, title) from a schema tree for structural matching.
+ * This allows matching schemas that are structurally identical but differ in documentation.
+ */
+function stripMetadata(obj: unknown): unknown {
+  if (Array.isArray(obj)) return obj.map(stripMetadata);
+  if (typeof obj === 'object' && obj !== null) {
+    const result: Record<string, unknown> = {};
+    for (const [key, val] of Object.entries(obj as Record<string, unknown>)) {
+      if (key === 'description' || key === 'title') continue;
+      result[key] = stripMetadata(val);
+    }
+    return result;
+  }
+  return obj;
+}
+
+/**
+ * Produce a canonical JSON string ignoring metadata (description, title)
+ * for structural signature matching.
+ */
+export function structuralStringify(obj: unknown): string {
+  return JSON.stringify(sortKeys(stripMetadata(obj)));
+}
+
+/**
  * Count path-local $like refs in the bundled spec (should be 0 after normalization).
  */
 export function findPathLocalLikeRefs(root: unknown): number {

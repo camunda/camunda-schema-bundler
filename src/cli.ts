@@ -227,6 +227,18 @@ async function main(): Promise<void> {
       `augmented=${result.stats.augmentedSchemaCount}`
   );
 
+  if (result.stats.promotedInlineSchemaCount > 0) {
+    console.log(
+      `[camunda-schema-bundler] Promoted ${result.stats.promotedInlineSchemaCount} inline schemas to named components`
+    );
+  }
+
+  if (result.stats.freshDedupCount > 0) {
+    console.log(
+      `[camunda-schema-bundler] Fresh dedup replaced ${result.stats.freshDedupCount} inline duplicates`
+    );
+  }
+
   if (result.stats.dereferencedPathLocalRefCount > 0) {
     console.log(
       `[camunda-schema-bundler] Dereferenced ${result.stats.dereferencedPathLocalRefCount} path-local $refs`

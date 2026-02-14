@@ -18,10 +18,181 @@ import {
   rewriteExternalRefsToLocal,
   resolveInternalRef,
   canonicalStringify,
+  structuralStringify,
   findPathLocalLikeRefs,
 } from './helpers.js';
 import type { BundleOptions, BundleResult, BundleStats } from './types.js';
 import { extractMetadata } from './metadata.js';
+
+/**
+ * Promote inline schemas inside component-level `oneOf`/`anyOf` compositions
+ * to named component schemas. This ensures generators produce properly-named
+ * types instead of auto-generating names from path context.
+ *
+ * Primary targets:
+ * - `*FilterProperty` schemas have inline "Exact match" oneOf variants
+ * - Any other component with inline oneOf/anyOf variants that have titles
+ */
+function promoteInlineSchemas(
+  schemas: Record<string, unknown>,
+  stats: BundleStats
+): void {
+  const newSchemas: Record<string, unknown> = {};
+
+  for (const [schemaName, schemaValue] of Object.entries(schemas)) {
+    if (!schemaValue || typeof schemaValue !== 'object') continue;
+    const schema = schemaValue as Record<string, unknown>;
+
+    for (const compositionKey of ['oneOf', 'anyOf'] as const) {
+      const variants = schema[compositionKey];
+      if (!Array.isArray(variants)) continue;
+
+      for (let i = 0; i < variants.length; i++) {
+        const variant = variants[i] as Record<string, unknown> | null;
+        if (!variant || typeof variant !== 'object' || variant['$ref']) continue;
+
+        // Only promote schemas that have enough structure to warrant a name
+        const hasProperties = 'properties' in variant;
+        const hasEnum = 'enum' in variant;
+        const hasAllOf = 'allOf' in variant;
+        if (!hasProperties && !hasEnum && !hasAllOf) continue;
+
+        // Derive a proper name for the promoted schema
+        let promotedName: string | undefined;
+
+        // Pattern: *FilterProperty with inline "Exact match" variant
+        if (schemaName.endsWith('FilterProperty')) {
+          const title = variant['title'];
+          if (typeof title === 'string' && /exact\s*match/i.test(title)) {
+            const baseName = schemaName.replace(/FilterProperty$/, '');
+            promotedName = `${baseName}ExactMatch`;
+          }
+        }
+
+        // If no specific pattern matched, derive from schema name + title
+        if (!promotedName) {
+          const title = variant['title'];
+          if (typeof title === 'string' && title.trim()) {
+            const cleanTitle = title.replace(/\s+/g, '');
+            promotedName = `${schemaName}${cleanTitle}`;
+          }
+        }
+
+        if (!promotedName) continue;
+
+        // Ensure unique name
+        let finalName = promotedName;
+        let counter = 1;
+        while (schemas[finalName] || newSchemas[finalName]) {
+          finalName = `${promotedName}${counter}`;
+          counter++;
+        }
+
+        // Extract inline schema to a named component
+        newSchemas[finalName] = JSON.parse(JSON.stringify(variant));
+
+        // Replace inline with $ref
+        for (const k of Object.keys(variant)) delete variant[k];
+        variant['$ref'] = `#/components/schemas/${finalName}`;
+      }
+    }
+  }
+
+  // Merge promoted schemas into components
+  const promotedCount = Object.keys(newSchemas).length;
+  if (promotedCount > 0) {
+    Object.assign(schemas, newSchemas);
+    console.log(
+      `[camunda-schema-bundler] Promoted ${promotedCount} inline schemas to named components`
+    );
+  }
+}
+
+/**
+ * After normalization, do a fresh dedup pass to replace any inline schemas
+ * in paths that are structurally identical to a named component schema.
+ * This catches inlines that survived the initial signature matching because
+ * normalization may have changed component schemas' internal structure.
+ *
+ * Uses two-pass matching: exact signature first, then structural (ignoring
+ * description/title metadata) to catch dereferenced schemas that differ
+ * only in metadata from their component counterparts.
+ */
+function freshSignatureDedup(
+  bundled: Record<string, unknown>,
+  schemas: Record<string, unknown>
+): number {
+  // Build both exact and structural signature maps
+  const exactSigMap = new Map<string, string>();
+  const structSigMap = new Map<string, string>();
+  for (const [name, schema] of Object.entries(schemas)) {
+    if (!schema || typeof schema !== 'object') continue;
+    const obj = schema as Record<string, unknown>;
+    if (obj['$ref']) continue;
+    exactSigMap.set(canonicalStringify(schema), name);
+    structSigMap.set(structuralStringify(schema), name);
+  }
+
+  let replaced = 0;
+  const seen = new Set<unknown>();
+  const componentValues = new Set(Object.values(schemas));
+
+  function walk(node: unknown): void {
+    if (!node || typeof node !== 'object' || seen.has(node)) return;
+    seen.add(node);
+
+    if (componentValues.has(node)) {
+      if (!Array.isArray(node)) {
+        for (const v of Object.values(node as Record<string, unknown>))
+          walk(v);
+      }
+      return;
+    }
+
+    if (Array.isArray(node)) {
+      for (const item of node) walk(item);
+      return;
+    }
+
+    const obj = node as Record<string, unknown>;
+
+    // Recurse first (post-order)
+    for (const v of Object.values(obj)) walk(v);
+
+    if (obj['$ref']) return;
+
+    const isSchemaLike =
+      'properties' in obj ||
+      'enum' in obj ||
+      'allOf' in obj ||
+      'oneOf' in obj ||
+      'anyOf' in obj;
+    if (!isSchemaLike) return;
+
+    // Try exact match first
+    const exactSig = canonicalStringify(obj);
+    let matchName = exactSigMap.get(exactSig);
+
+    // Fall back to structural match (ignores description, title)
+    if (!matchName) {
+      const structSig = structuralStringify(obj);
+      matchName = structSigMap.get(structSig);
+    }
+
+    if (matchName) {
+      for (const k of Object.keys(obj)) delete obj[k];
+      obj['$ref'] = `#/components/schemas/${matchName}`;
+      replaced++;
+    }
+  }
+
+  const paths = bundled['paths'];
+  if (paths && typeof paths === 'object') {
+    walk(paths);
+  }
+
+  return replaced;
+}
 
 /** Default manual overrides for known tricky path-local refs. */
 const DEFAULT_MANUAL_OVERRIDES: Record<string, string> = {
@@ -52,6 +223,8 @@ export async function bundle(options: BundleOptions): Promise<BundleResult> {
     pathCount: 0,
     schemaCount: 0,
     augmentedSchemaCount: 0,
+    promotedInlineSchemaCount: 0,
+    freshDedupCount: 0,
     dereferencedPathLocalRefCount: 0,
     pathLocalLikeRefCount: 0,
   };
@@ -202,6 +375,19 @@ export async function bundle(options: BundleOptions): Promise<BundleResult> {
   safeNormalize(bundled);
   rewriteInternalRefs(bundled);
 
+  // ── Step 3b: Promote inline schemas to named components ───────────────────
+
+  const prePromotionCount = Object.keys(schemas).length;
+  promoteInlineSchemas(schemas, stats);
+  stats.promotedInlineSchemaCount = Object.keys(schemas).length - prePromotionCount;
+
+  // Post-normalization + promotion snapshot for dereferencing.
+  // Using this instead of preNormSnapshot means dereferenced schemas will
+  // have normalized $like refs and promoted ExactMatch $refs.
+  const postNormSnapshot = JSON.parse(JSON.stringify(bundled));
+
+  // ── Step 3c: Fresh dedup pass (runs after deref, see Step 4b) ──────────────
+
   // ── Step 4: Optionally dereference remaining path-local $refs ─────────────
 
   if (options.dereferencePathLocalRefs) {
@@ -224,10 +410,17 @@ export async function bundle(options: BundleOptions): Promise<BundleResult> {
               typeof item['$ref'] === 'string' &&
               (item['$ref'] as string).startsWith('#/paths/')
             ) {
-              const resolved = resolveInternalRef(
-                preNormSnapshot as Record<string, unknown>,
-                item['$ref'] as string
-              );
+              // Prefer post-normalization source (normalized $like, promoted schemas);
+              // fall back to pre-normalization if the path was removed during normalization
+              const resolved =
+                resolveInternalRef(
+                  postNormSnapshot as Record<string, unknown>,
+                  item['$ref'] as string
+                ) ??
+                resolveInternalRef(
+                  preNormSnapshot as Record<string, unknown>,
+                  item['$ref'] as string
+                );
               if (resolved) {
                 node[i] = JSON.parse(JSON.stringify(resolved));
                 dereferenced++;
@@ -244,10 +437,15 @@ export async function bundle(options: BundleOptions): Promise<BundleResult> {
               typeof valObj['$ref'] === 'string' &&
               (valObj['$ref'] as string).startsWith('#/paths/')
             ) {
-              const resolved = resolveInternalRef(
-                preNormSnapshot as Record<string, unknown>,
-                valObj['$ref'] as string
-              );
+              const resolved =
+                resolveInternalRef(
+                  postNormSnapshot as Record<string, unknown>,
+                  valObj['$ref'] as string
+                ) ??
+                resolveInternalRef(
+                  preNormSnapshot as Record<string, unknown>,
+                  valObj['$ref'] as string
+                );
               if (resolved) {
                 obj[key] = JSON.parse(JSON.stringify(resolved));
                 dereferenced++;
@@ -261,6 +459,17 @@ export async function bundle(options: BundleOptions): Promise<BundleResult> {
       stats.dereferencedPathLocalRefCount += dereferenced;
       if (dereferenced === 0) break;
     }
+  }
+
+  // ── Step 4b: Fresh dedup pass ──────────────────────────────────────────────
+  // Run after dereferencing so we can catch inline schemas that were created
+  // by expanding path-local $refs.
+
+  stats.freshDedupCount = freshSignatureDedup(bundled, schemas);
+  if (stats.freshDedupCount > 0) {
+    console.log(
+      `[camunda-schema-bundler] Fresh dedup replaced ${stats.freshDedupCount} inline duplicates`
+    );
   }
 
   // ── Step 5: Validate ──────────────────────────────────────────────────────
