@@ -181,9 +181,30 @@ export interface OperationSummary {
   method: string;
   tags: string[];
   summary?: string;
+  description?: string;
   eventuallyConsistent: boolean;
   hasRequestBody: boolean;
   requestBodyUnion: boolean;
+
+  /** True when the operation has a JSON-like body and no path/query parameters. */
+  bodyOnly: boolean;
+
+  /** Names of path parameters (e.g. ['processInstanceKey']). */
+  pathParams: string[];
+
+  /** Query parameters with required flag. */
+  queryParams: OperationQueryParam[];
+
+  /** For union request bodies: the $ref target schema names. */
+  requestBodyUnionRefs: string[];
+
+  /** Whether the (resolved) request body has an optional tenantId property. */
+  optionalTenantIdInBody: boolean;
+}
+
+export interface OperationQueryParam {
+  name: string;
+  required: boolean;
 }
 
 export interface SchemaConstraints {

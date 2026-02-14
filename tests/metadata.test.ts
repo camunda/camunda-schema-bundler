@@ -38,6 +38,14 @@ describe('extractMetadata', () => {
       type: 'object',
       properties: { name: { type: 'string' } },
     },
+    TenantBody: {
+      type: 'object',
+      properties: {
+        name: { type: 'string' },
+        tenantId: { type: 'string' },
+      },
+      required: ['name'],
+    },
   };
 
   const spec: Record<string, unknown> = {
@@ -48,7 +56,12 @@ describe('extractMetadata', () => {
           operationId: 'listProcessInstances',
           tags: ['Process Instance'],
           summary: 'List process instances',
+          description: 'Returns a list of process instances',
           'x-eventually-consistent': true,
+          parameters: [
+            { in: 'query', name: 'limit', required: false },
+            { in: 'query', name: 'sort', required: false },
+          ],
         },
         post: {
           operationId: 'createProcessInstance',
@@ -56,10 +69,19 @@ describe('extractMetadata', () => {
           requestBody: {
             content: {
               'application/json': {
-                schema: { $ref: '#/components/schemas/PlainSchema' },
+                schema: { $ref: '#/components/schemas/TenantBody' },
               },
             },
           },
+        },
+      },
+      '/process-instances/{processInstanceKey}': {
+        get: {
+          operationId: 'getProcessInstance',
+          tags: ['Process Instance'],
+          parameters: [
+            { in: 'path', name: 'processInstanceKey', required: true },
+          ],
         },
       },
       '/jobs': {
@@ -136,7 +158,7 @@ describe('extractMetadata', () => {
   });
 
   it('extracts all operations', () => {
-    expect(metadata.operations).toHaveLength(3);
+    expect(metadata.operations).toHaveLength(4);
     const create = metadata.operations.find(
       (o) => o.operationId === 'createProcessInstance'
     );
@@ -156,7 +178,63 @@ describe('extractMetadata', () => {
   it('reports correct integrity counts', () => {
     expect(metadata.integrity.totalSemanticKeys).toBe(1);
     expect(metadata.integrity.totalUnions).toBe(2);
-    expect(metadata.integrity.totalOperations).toBe(3);
+    expect(metadata.integrity.totalOperations).toBe(4);
     expect(metadata.integrity.totalEventuallyConsistent).toBe(1);
+  });
+
+  it('extracts operation description', () => {
+    const list = metadata.operations.find(
+      (o) => o.operationId === 'listProcessInstances'
+    );
+    expect(list!.description).toBe('Returns a list of process instances');
+  });
+
+  it('extracts path parameters', () => {
+    const get = metadata.operations.find(
+      (o) => o.operationId === 'getProcessInstance'
+    );
+    expect(get).toBeDefined();
+    expect(get!.pathParams).toEqual(['processInstanceKey']);
+    expect(get!.bodyOnly).toBe(false);
+  });
+
+  it('extracts query parameters with required flag', () => {
+    const list = metadata.operations.find(
+      (o) => o.operationId === 'listProcessInstances'
+    );
+    expect(list!.queryParams).toEqual([
+      { name: 'limit', required: false },
+      { name: 'sort', required: false },
+    ]);
+    expect(list!.bodyOnly).toBe(false);
+  });
+
+  it('computes bodyOnly for body-only operations', () => {
+    const create = metadata.operations.find(
+      (o) => o.operationId === 'createProcessInstance'
+    );
+    expect(create!.bodyOnly).toBe(true);
+    expect(create!.pathParams).toEqual([]);
+    expect(create!.queryParams).toEqual([]);
+  });
+
+  it('extracts requestBodyUnionRefs', () => {
+    const activate = metadata.operations.find(
+      (o) => o.operationId === 'activateJobs'
+    );
+    expect(activate!.requestBodyUnionRefs).toEqual(['PlainSchema', 'Tags']);
+  });
+
+  it('detects optionalTenantIdInBody', () => {
+    const create = metadata.operations.find(
+      (o) => o.operationId === 'createProcessInstance'
+    );
+    expect(create!.optionalTenantIdInBody).toBe(true);
+
+    // activateJobs has union body - PlainSchema has no tenantId
+    const activate = metadata.operations.find(
+      (o) => o.operationId === 'activateJobs'
+    );
+    expect(activate!.optionalTenantIdInBody).toBe(false);
   });
 });

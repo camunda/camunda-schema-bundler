@@ -20,6 +20,7 @@ export type {
   ArraySchemaEntry,
   EventuallyConsistentOp,
   OperationSummary,
+  OperationQueryParam,
   SchemaConstraints,
 } from './types.js';
 export type { FetchOptions, FetchResult } from './fetch.js';

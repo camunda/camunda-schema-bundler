@@ -16,6 +16,7 @@ import type {
   ArraySchemaEntry,
   EventuallyConsistentOp,
   OperationSummary,
+  OperationQueryParam,
   SchemaConstraints,
 } from './types.js';
 
@@ -252,6 +253,12 @@ function extractOperations(spec: Record<string, unknown>): {
   const paths = spec['paths'] as Record<string, unknown> | undefined;
   if (!paths) return { eventuallyConsistentOps, operations };
 
+  const componentSchemas = (
+    (spec['components'] as Record<string, unknown> | undefined)?.['schemas'] as
+      | Record<string, unknown>
+      | undefined
+  ) ?? {};
+
   for (const [pathStr, pathItem] of Object.entries(paths)) {
     if (!pathItem || typeof pathItem !== 'object') continue;
     const pathObj = pathItem as Record<string, unknown>;
@@ -263,27 +270,66 @@ function extractOperations(spec: Record<string, unknown>): {
       const operationId = (op['operationId'] as string) || `${method}_${pathStr}`;
       const tags = (op['tags'] as string[]) || [];
       const summary = op['summary'] as string | undefined;
+      const description = op['description'] as string | undefined;
 
       const ecValue = op['x-eventually-consistent'];
       const eventuallyConsistent = ecValue === true;
 
+      // Parameters
+      const rawParams = (op['parameters'] as Record<string, unknown>[] | undefined) ?? [];
+      const pathParams: string[] = [];
+      const queryParams: OperationQueryParam[] = [];
+      for (const p of rawParams) {
+        const pIn = p['in'] as string | undefined;
+        const pName = p['name'] as string | undefined;
+        if (!pName) continue;
+        if (pIn === 'path') pathParams.push(pName);
+        else if (pIn === 'query') queryParams.push({ name: pName, required: !!p['required'] });
+      }
+
       const hasRequestBody = !!op['requestBody'];
       let requestBodyUnion = false;
+      const requestBodyUnionRefs: string[] = [];
+      let optionalTenantIdInBody = false;
+
       if (hasRequestBody) {
         const rb = op['requestBody'] as Record<string, unknown>;
         const content = rb['content'] as Record<string, unknown> | undefined;
         if (content) {
-          const jsonContent = content['application/json'] as
-            | Record<string, unknown>
-            | undefined;
-          const schema = jsonContent?.['schema'] as
-            | Record<string, unknown>
-            | undefined;
-          if (schema && (schema['oneOf'] || schema['anyOf'])) {
-            requestBodyUnion = true;
+          // Check all JSON-like content types
+          for (const [contentType, mediaObj] of Object.entries(content)) {
+            if (!/json|octet|multipart|text\//i.test(contentType)) continue;
+            const media = mediaObj as Record<string, unknown> | undefined;
+            const schema = media?.['schema'] as Record<string, unknown> | undefined;
+            if (!schema) continue;
+
+            const variants = (schema['oneOf'] || schema['anyOf']) as
+              | Record<string, unknown>[]
+              | undefined;
+            if (Array.isArray(variants) && variants.length > 1) {
+              requestBodyUnion = true;
+              for (const v of variants) {
+                if (v['$ref'] && typeof v['$ref'] === 'string') {
+                  const refName = (v['$ref'] as string).split('/').pop()!;
+                  requestBodyUnionRefs.push(refName);
+                }
+              }
+              // optionalTenantIdInBody: true only if ALL variants have optional tenantId
+              const resolved = variants.map((v) => resolveSchemaRef(v, componentSchemas));
+              if (resolved.length > 0 && resolved.every((rs) => rs && hasOptionalTenantId(rs))) {
+                optionalTenantIdInBody = true;
+              }
+            } else {
+              const resolved = resolveSchemaRef(schema, componentSchemas);
+              if (resolved && hasOptionalTenantId(resolved)) {
+                optionalTenantIdInBody = true;
+              }
+            }
           }
         }
       }
+
+      const bodyOnly = hasRequestBody && pathParams.length === 0 && queryParams.length === 0;
 
       operations.push({
         operationId,
@@ -291,9 +337,15 @@ function extractOperations(spec: Record<string, unknown>): {
         method,
         tags,
         summary,
+        description,
         eventuallyConsistent,
         hasRequestBody,
         requestBodyUnion,
+        bodyOnly,
+        pathParams,
+        queryParams,
+        requestBodyUnionRefs,
+        optionalTenantIdInBody,
       });
 
       if (eventuallyConsistent) {
@@ -308,4 +360,25 @@ function extractOperations(spec: Record<string, unknown>): {
   }
 
   return { eventuallyConsistentOps, operations };
+}
+
+/** Resolve a single $ref to a component schema, or return the schema itself. */
+function resolveSchemaRef(
+  schema: Record<string, unknown>,
+  componentSchemas: Record<string, unknown>
+): Record<string, unknown> | undefined {
+  if (schema['$ref'] && typeof schema['$ref'] === 'string') {
+    const name = (schema['$ref'] as string).split('/').pop()!;
+    return componentSchemas[name] as Record<string, unknown> | undefined;
+  }
+  return schema;
+}
+
+/** Check if a resolved schema has an optional tenantId property. */
+function hasOptionalTenantId(schema: Record<string, unknown>): boolean {
+  if (schema['type'] !== 'object') return false;
+  const props = schema['properties'] as Record<string, unknown> | undefined;
+  if (!props || !props['tenantId']) return false;
+  const required = (schema['required'] as string[] | undefined) ?? [];
+  return !required.includes('tenantId');
 }
