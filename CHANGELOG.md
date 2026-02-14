@@ -1,3 +1,10 @@
+# [1.1.0](https://github.com/camunda/camunda-schema-bundler/compare/v1.0.0...v1.1.0) (2026-02-14)
+
+
+### Features
+
+* **metadata:** enrich operation summaries with params, bodyOnly, unionRefs, tenantId ([e5ad40c](https://github.com/camunda/camunda-schema-bundler/commit/e5ad40c572395f24ad5e1c6090da7ccda3c784e8))
+
 # 1.0.0 (2026-02-14)
 
 
