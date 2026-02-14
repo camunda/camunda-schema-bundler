@@ -1,0 +1,46 @@
+name: Binary Release
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: write
+
+jobs:
+  build-binaries:
+    name: Build & Upload Binaries
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.release.tag_name }}
+
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.x
+          cache: 'npm'
+
+      - name: Install deps & build
+        run: |
+          npm ci
+          npm run build
+
+      - name: Compile binaries
+        run: bash scripts/build-binaries.sh
+
+      - name: Restore full dependencies
+        run: npm ci
+
+      - name: Upload release assets
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          for f in bin/camunda-schema-bundler-*; do
+            echo "Uploading $f..."
+            gh release upload "${{ github.event.release.tag_name }}" "$f" --clobber
+          done

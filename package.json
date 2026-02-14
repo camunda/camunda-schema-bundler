@@ -1,0 +1,54 @@
+{
+  "name": "camunda-schema-bundler",
+  "version": "0.0.1",
+  "description": "Bundle the Camunda multi-file OpenAPI spec into a single JSON file with schema normalization and metadata extraction",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "bin": {
+    "camunda-schema-bundler": "dist/cli.js"
+  },
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "lint": "tsc --noEmit",
+    "build:binaries": "bash scripts/build-binaries.sh",
+    "prepublishOnly": "npm run build"
+  },
+  "keywords": [
+    "camunda",
+    "openapi",
+    "bundler",
+    "schema"
+  ],
+  "license": "Apache-2.0",
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "@apidevtools/swagger-parser": "^10.1.1",
+    "yaml": "^2.7.1"
+  },
+  "devDependencies": {
+    "@commitlint/cli": "^20.4.1",
+    "@commitlint/config-conventional": "^20.4.1",
+    "@semantic-release/changelog": "^6.0.3",
+    "@semantic-release/git": "^10.0.1",
+    "@semantic-release/github": "^12.0.6",
+    "@types/node": "^22.15.0",
+    "semantic-release": "^25.0.3",
+    "typescript": "^5.8.3",
+    "vitest": "^3.1.3"
+  }
+}

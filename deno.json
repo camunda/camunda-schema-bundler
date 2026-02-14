@@ -1,0 +1,7 @@
+{
+  "imports": {
+    "@apidevtools/swagger-parser": "npm:@apidevtools/swagger-parser@^10.1.1",
+    "yaml": "npm:yaml@^2.7.1"
+  },
+  "nodeModulesDir": "auto"
+}
