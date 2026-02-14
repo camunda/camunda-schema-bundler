@@ -46,6 +46,30 @@ describe('extractMetadata', () => {
       },
       required: ['name'],
     },
+    TenantVariantA: {
+      type: 'object',
+      properties: {
+        idA: { type: 'string' },
+        tenantId: { type: 'string' },
+      },
+      required: ['idA'],
+    },
+    TenantVariantB: {
+      type: 'object',
+      properties: {
+        idB: { type: 'string' },
+        tenantId: { type: 'string' },
+      },
+      required: ['idB'],
+    },
+    IndirectUnion: {
+      'x-polymorphic-schema': true,
+      type: 'object',
+      oneOf: [
+        { $ref: '#/components/schemas/TenantVariantA' },
+        { $ref: '#/components/schemas/TenantVariantB' },
+      ],
+    },
   };
 
   const spec: Record<string, unknown> = {
@@ -102,6 +126,19 @@ describe('extractMetadata', () => {
           },
         },
       },
+      '/evaluate': {
+        post: {
+          operationId: 'evaluateIndirect',
+          tags: ['Evaluation'],
+          requestBody: {
+            content: {
+              'application/json': {
+                schema: { $ref: '#/components/schemas/IndirectUnion' },
+              },
+            },
+          },
+        },
+      },
     },
   };
 
@@ -126,7 +163,7 @@ describe('extractMetadata', () => {
   });
 
   it('extracts union types', () => {
-    expect(metadata.unions).toHaveLength(2);
+    expect(metadata.unions).toHaveLength(3);
     const wrapper = metadata.unions.find((u) => u.name === 'ResourceKey');
     expect(wrapper).toBeDefined();
     expect(wrapper!.kind).toBe('union-wrapper');
@@ -158,7 +195,7 @@ describe('extractMetadata', () => {
   });
 
   it('extracts all operations', () => {
-    expect(metadata.operations).toHaveLength(4);
+    expect(metadata.operations).toHaveLength(5);
     const create = metadata.operations.find(
       (o) => o.operationId === 'createProcessInstance'
     );
@@ -177,8 +214,8 @@ describe('extractMetadata', () => {
 
   it('reports correct integrity counts', () => {
     expect(metadata.integrity.totalSemanticKeys).toBe(1);
-    expect(metadata.integrity.totalUnions).toBe(2);
-    expect(metadata.integrity.totalOperations).toBe(4);
+    expect(metadata.integrity.totalUnions).toBe(3);
+    expect(metadata.integrity.totalOperations).toBe(5);
     expect(metadata.integrity.totalEventuallyConsistent).toBe(1);
   });
 
@@ -236,5 +273,16 @@ describe('extractMetadata', () => {
       (o) => o.operationId === 'activateJobs'
     );
     expect(activate!.optionalTenantIdInBody).toBe(false);
+  });
+
+  it('resolves indirect $ref → oneOf for union detection and tenantId', () => {
+    const op = metadata.operations.find(
+      (o) => o.operationId === 'evaluateIndirect'
+    );
+    expect(op).toBeDefined();
+    expect(op!.requestBodyUnion).toBe(true);
+    expect(op!.requestBodyUnionRefs).toEqual(['TenantVariantA', 'TenantVariantB']);
+    expect(op!.optionalTenantIdInBody).toBe(true);
+    expect(op!.bodyOnly).toBe(true);
   });
 });

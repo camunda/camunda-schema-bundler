@@ -300,8 +300,11 @@ function extractOperations(spec: Record<string, unknown>): {
           for (const [contentType, mediaObj] of Object.entries(content)) {
             if (!/json|octet|multipart|text\//i.test(contentType)) continue;
             const media = mediaObj as Record<string, unknown> | undefined;
-            const schema = media?.['schema'] as Record<string, unknown> | undefined;
-            if (!schema) continue;
+            const rawSchema = media?.['schema'] as Record<string, unknown> | undefined;
+            if (!rawSchema) continue;
+
+            // Resolve top-level $ref to get the actual schema (e.g. { $ref: '...Instruction' } → the Instruction schema)
+            const schema = resolveSchemaRef(rawSchema, componentSchemas) ?? rawSchema;
 
             const variants = (schema['oneOf'] || schema['anyOf']) as
               | Record<string, unknown>[]
