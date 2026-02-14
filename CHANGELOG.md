@@ -1,3 +1,10 @@
+## [1.1.1](https://github.com/camunda/camunda-schema-bundler/compare/v1.1.0...v1.1.1) (2026-02-14)
+
+
+### Bug Fixes
+
+* correctly handle oneOf containing tenantId ([e0b6f2c](https://github.com/camunda/camunda-schema-bundler/commit/e0b6f2c00ee23013610a2e880abbda452582653c))
+
 # [1.1.0](https://github.com/camunda/camunda-schema-bundler/compare/v1.0.0...v1.1.0) (2026-02-14)
 
 
