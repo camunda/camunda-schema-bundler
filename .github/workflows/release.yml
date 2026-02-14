@@ -71,8 +71,54 @@ jobs:
         run: npm run build
 
       - name: Publish (semantic-release)
+        id: release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           # TODO: Enable provenance once the repo is public
           # NPM_CONFIG_PROVENANCE: true
-        run: npx semantic-release
+        run: |
+          npx semantic-release
+          # Detect if a new release was created (tag on current commit)
+          NEW_TAG=$(git describe --tags --exact-match 2>/dev/null || echo "")
+          echo "tag=$NEW_TAG" >> "$GITHUB_OUTPUT"
+    outputs:
+      tag: ${{ steps.release.outputs.tag }}
+
+  build-binaries:
+    name: Build & Upload Binaries
+    needs: publish
+    if: needs.publish.outputs.tag != ''
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.publish.outputs.tag }}
+
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.x
+          cache: 'npm'
+
+      - name: Install deps & build
+        run: |
+          npm ci
+          npm run build
+
+      - name: Compile binaries
+        run: bash scripts/build-binaries.sh
+
+      - name: Restore full dependencies
+        run: npm ci
+
+      - name: Upload release assets
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          for f in bin/camunda-schema-bundler-*; do
+            echo "Uploading $f..."
+            gh release upload "${{ needs.publish.outputs.tag }}" "$f" --clobber
+          done

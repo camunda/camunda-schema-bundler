@@ -1,8 +1,13 @@
 name: Binary Release
 
+# Standalone fallback — binaries are normally built by the Release workflow.
+# Use workflow_dispatch to manually rebuild binaries for an existing release.
 on:
-  release:
-    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag (e.g. v1.2.3)'
+        required: true
 
 permissions:
   contents: write
@@ -14,7 +19,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.release.tag_name }}
+          ref: ${{ inputs.tag }}
 
       - uses: denoland/setup-deno@v2
         with:
@@ -42,5 +47,5 @@ jobs:
         run: |
           for f in bin/camunda-schema-bundler-*; do
             echo "Uploading $f..."
-            gh release upload "${{ github.event.release.tag_name }}" "$f" --clobber
+            gh release upload "${{ inputs.tag }}" "$f" --clobber
           done
