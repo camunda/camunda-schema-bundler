@@ -123,14 +123,26 @@ function freshSignatureDedup(
   schemas: Record<string, unknown>
 ): number {
   // Build both exact and structural signature maps
+  // Mark ambiguous signatures (multiple component schemas share the same structure)
+  const AMBIGUOUS = '@@AMBIGUOUS@@';
   const exactSigMap = new Map<string, string>();
   const structSigMap = new Map<string, string>();
   for (const [name, schema] of Object.entries(schemas)) {
     if (!schema || typeof schema !== 'object') continue;
     const obj = schema as Record<string, unknown>;
     if (obj['$ref']) continue;
-    exactSigMap.set(canonicalStringify(schema), name);
-    structSigMap.set(structuralStringify(schema), name);
+    const exactSig = canonicalStringify(schema);
+    if (exactSigMap.has(exactSig)) {
+      exactSigMap.set(exactSig, AMBIGUOUS);
+    } else {
+      exactSigMap.set(exactSig, name);
+    }
+    const structSig = structuralStringify(schema);
+    if (structSigMap.has(structSig)) {
+      structSigMap.set(structSig, AMBIGUOUS);
+    } else {
+      structSigMap.set(structSig, name);
+    }
   }
 
   let replaced = 0;
@@ -172,11 +184,13 @@ function freshSignatureDedup(
     // Try exact match first
     const exactSig = canonicalStringify(obj);
     let matchName = exactSigMap.get(exactSig);
+    if (matchName === AMBIGUOUS) matchName = undefined;
 
     // Fall back to structural match (ignores description, title)
     if (!matchName) {
       const structSig = structuralStringify(obj);
       matchName = structSigMap.get(structSig);
+      if (matchName === AMBIGUOUS) matchName = undefined;
     }
 
     if (matchName) {
@@ -270,9 +284,16 @@ export async function bundle(options: BundleOptions): Promise<BundleResult> {
   // ── Step 3: Normalize path-local $refs via signature matching ─────────────
 
   const componentValues = new Set(Object.values(schemas));
+  const AMBIGUOUS = '@@AMBIGUOUS@@';
   const schemaSignatureMap = new Map<string, string>();
   for (const [name, schema] of Object.entries(schemas)) {
-    schemaSignatureMap.set(canonicalStringify(schema), name);
+    const sig = canonicalStringify(schema);
+    if (schemaSignatureMap.has(sig)) {
+      // Multiple component schemas share the same signature — mark ambiguous
+      schemaSignatureMap.set(sig, AMBIGUOUS);
+    } else {
+      schemaSignatureMap.set(sig, name);
+    }
   }
 
   // Snapshot before normalization: resolveInternalRef reads from this
@@ -345,7 +366,7 @@ export async function bundle(options: BundleOptions): Promise<BundleResult> {
         // Signature matching
         const sig = canonicalStringify(resolved);
         const matchingName = schemaSignatureMap.get(sig);
-        if (matchingName) {
+        if (matchingName && matchingName !== AMBIGUOUS) {
           obj['$ref'] = `#/components/schemas/${matchingName}`;
           return;
         }
@@ -356,7 +377,7 @@ export async function bundle(options: BundleOptions): Promise<BundleResult> {
     if (!obj['$ref']) {
       const sig = canonicalStringify(obj);
       const matchingName = schemaSignatureMap.get(sig);
-      if (matchingName) {
+      if (matchingName && matchingName !== AMBIGUOUS) {
         for (const k of Object.keys(obj)) delete obj[k];
         obj['$ref'] = `#/components/schemas/${matchingName}`;
       }
