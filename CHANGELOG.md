@@ -1,3 +1,10 @@
+## [1.2.1](https://github.com/camunda/camunda-schema-bundler/compare/v1.2.0...v1.2.1) (2026-02-17)
+
+
+### Bug Fixes
+
+* deterministic schema output fix ([ca24f97](https://github.com/camunda/camunda-schema-bundler/commit/ca24f97bfc56b1bdf09e245d4477dc0115dabf4d))
+
 # [1.2.0](https://github.com/camunda/camunda-schema-bundler/compare/v1.1.2...v1.2.0) (2026-02-14)
 
 
