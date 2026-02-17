@@ -1,3 +1,10 @@
+## [1.3.1](https://github.com/camunda/camunda-schema-bundler/compare/v1.3.0...v1.3.1) (2026-02-17)
+
+
+### Bug Fixes
+
+* force publish ([c453cca](https://github.com/camunda/camunda-schema-bundler/commit/c453cca33f05549e1dd8da2d21d3ddd06b83528e))
+
 # [1.3.0](https://github.com/camunda/camunda-schema-bundler/compare/v1.2.1...v1.3.0) (2026-02-17)
 
 
