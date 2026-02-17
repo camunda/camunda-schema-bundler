@@ -53,31 +53,67 @@ Available binaries:
 ## CLI Usage
 
 ```bash
-# Bundle from a fetched upstream spec directory
+# Fetch from upstream and bundle (simplest usage — fetches from main)
 camunda-schema-bundler \
-  --spec-dir external-spec/upstream/zeebe/gateway-protocol/src/main/proto/v2 \
   --output-spec external-spec/bundled/rest-api.bundle.json \
   --output-metadata external-spec/bundled/spec-metadata.json
 
-# For generators that can't handle path-local $refs (e.g. Microsoft.OpenApi for C#)
+# Fetch a specific branch/tag/SHA
+camunda-schema-bundler --ref stable/8.8 \
+  --output-spec rest-api.bundle.json
+
+# Auto-detect upstream ref from current git branch
+# (main → main, stable/* → stable/*, other → main)
+camunda-schema-bundler --auto-ref \
+  --output-spec external-spec/bundled/rest-api.bundle.json
+
+# Use already-fetched spec (no network)
 camunda-schema-bundler \
   --spec-dir external-spec/upstream/zeebe/gateway-protocol/src/main/proto/v2 \
-  --output-spec external-spec/bundled/rest-api.bundle.json \
-  --deref-path-local
+  --output-spec external-spec/bundled/rest-api.bundle.json
+
+# Bundle with path-local deref (for C# / Microsoft.OpenApi)
+camunda-schema-bundler --deref-path-local \
+  --output-spec external-spec/bundled/rest-api.bundle.json
+
+# Check version
+camunda-schema-bundler --version
 ```
 
 ### CLI Options
 
 | Option | Description |
 |---|---|
-| `--spec-dir <path>` | Path to the upstream spec directory (required) |
+| **Modes** | |
+| `--fetch` | Fetch upstream spec before bundling (default when no `--spec-dir`) |
+| `--spec-dir <path>` | Use an existing local spec directory (skip fetch) |
+| **Fetch options** | |
+| `--ref <ref>` | Git ref to fetch: branch, tag, or SHA (default: `main`) |
+| `--auto-ref` | Auto-detect ref from current git branch or `SPEC_REF` env var |
+| `--repo-url <url>` | Git repo URL (default: `https://github.com/camunda/camunda.git`) |
+| `--output-dir <path>` | Local directory for fetched spec files |
+| `--skip-fetch-if-exists` | Skip fetch if the entry file already exists locally |
+| **Bundle options** | |
 | `--entry-file <name>` | Entry YAML file name (default: `rest-api.yaml`) |
 | `--output-spec <path>` | Output path for the bundled JSON spec |
 | `--output-metadata <path>` | Output path for the metadata IR JSON |
 | `--deref-path-local` | Inline remaining path-local `$ref`s (needed for Microsoft.OpenApi) |
 | `--allow-like-refs` | Don't fail on surviving path-local `$like` refs |
+| **General** | |
+| `--help`, `-h` | Show help |
+| `--version`, `-v` | Show version |
+
+### Auto-ref detection
+
+The `--auto-ref` flag (and `detectUpstreamRef()` in the library API) resolves the upstream spec ref using this priority:
+
+1. `SPEC_REF` environment variable (always wins)
+2. Current git branch: `main` → `main`, `stable/X.Y` → `stable/X.Y`
+3. Falls back to `main` for other branches or if git is unavailable
 
 ## Library API
+
+### `bundle()` — Bundle from a local spec directory
 
 ```typescript
 import { bundle } from 'camunda-schema-bundler';
@@ -86,30 +122,78 @@ const result = await bundle({
   specDir: 'external-spec/upstream/zeebe/gateway-protocol/src/main/proto/v2',
   outputSpec: 'external-spec/bundled/rest-api.bundle.json',
   outputMetadata: 'external-spec/bundled/spec-metadata.json',
-  dereferencePathLocalRefs: false, // set true for C#
+  dereferencePathLocalRefs: false, // set true for C# / Python
 });
 
 console.log(result.stats);
-// { pathCount: 140, schemaCount: 465, augmentedSchemaCount: 465, ... }
+// {
+//   pathCount: 140, schemaCount: 511, augmentedSchemaCount: 511,
+//   promotedInlineSchemaCount: 46, freshDedupCount: 298,
+//   dereferencedPathLocalRefCount: 0, pathLocalLikeRefCount: 0
+// }
+```
 
-console.log(result.metadata.integrity);
-// { totalSemanticKeys: 33, totalUnions: 49, totalOperations: 168, totalEventuallyConsistent: 88 }
+### `fetchAndBundle()` — Fetch + bundle in one call
+
+```typescript
+import { fetchAndBundle } from 'camunda-schema-bundler';
+
+const result = await fetchAndBundle({
+  ref: 'stable/8.8',                // optional, default: "main"
+  outputDir: 'external-spec/upstream/zeebe/gateway-protocol/src/main/proto/v2',
+  outputSpec: 'external-spec/bundled/rest-api.bundle.json',
+  outputMetadata: 'external-spec/bundled/spec-metadata.json',
+});
+```
+
+### `fetchSpec()` — Fetch only
+
+```typescript
+import { fetchSpec } from 'camunda-schema-bundler';
+
+const { specDir, entryPath, fetched } = await fetchSpec({
+  ref: 'main',
+  outputDir: 'external-spec/upstream/zeebe/gateway-protocol/src/main/proto/v2',
+  skipIfExists: true, // skip if already fetched
+});
+```
+
+### `detectUpstreamRef()` — Auto-detect git ref
+
+```typescript
+import { detectUpstreamRef } from 'camunda-schema-bundler';
+
+const { ref, source, branch } = detectUpstreamRef();
+// { ref: "stable/8.8", source: "branch-match", branch: "stable/8.8" }
+```
+
+### Utility exports
+
+```typescript
+import {
+  hashDirectoryTree,     // SHA-256 hash of a directory for drift detection
+  listFilesRecursive,    // List all files in a directory recursively
+  findPathLocalLikeRefs, // Find surviving path-local $like refs in a spec
+} from 'camunda-schema-bundler';
 ```
 
 ## Bundling Pipeline
 
-1. **Bundle** — `SwaggerParser.bundle()` merges multi-file YAML into a single document
-2. **Augment** — Scan all upstream YAML files and add any schemas missing from the bundle
-3. **Normalize** — Rewrite path-local `$ref`s back to `#/components/schemas/...` using:
+1. **Fetch** (optional) — Sparse git clone of [camunda/camunda](https://github.com/camunda/camunda) to extract only the OpenAPI spec directory
+2. **Bundle** — `SwaggerParser.bundle()` merges multi-file YAML into a single document
+3. **Augment** — Scan all upstream YAML files and add any schemas missing from the bundle
+4. **Normalize** — Rewrite path-local `$ref`s back to `#/components/schemas/...` using:
    - Signature matching (canonical JSON comparison against known component schemas)
-   - `$like` → `LikeFilter` rewrite
+   - `$like` → `LikeFilter` rewrite (handles both `$like` and `%24like` encoded forms)
    - Manual overrides for known tricky paths
    - Inline deduplication
    - `x-semantic-type` extension rewriting
-4. **Rewrite** — Decode URI-encoded internal refs (`%24like` → `$like`)
-5. **Validate** — Fail-fast if any path-local `$like` refs survive (configurable)
-6. **Dereference** (optional) — Inline remaining path-local `$ref`s for strict generators
-7. **Extract metadata** — Build the intermediate representation
+5. **Promote** — Inline schemas that couldn't be matched to existing components are promoted to new named component schemas
+6. **Fresh dedup** — Iterative pass (up to 10 rounds until convergence) that deduplicates newly-promoted schemas against each other and existing components using signature matching, including resolution through intermediate `$ref` chains
+7. **Rewrite** — Decode URI-encoded internal refs (`%24like` → `$like`)
+8. **Validate** — Fail-fast if any path-local `$like` refs survive (configurable with `--allow-like-refs`)
+9. **Dereference** (optional, `--deref-path-local`) — Inline remaining path-local `$ref`s for strict generators
+10. **Extract metadata** — Build the intermediate representation (semantic keys, unions, operations, etc.)
 
 ## Metadata IR
 
