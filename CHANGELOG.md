@@ -1,3 +1,10 @@
+## [1.3.3](https://github.com/camunda/camunda-schema-bundler/compare/v1.3.2...v1.3.3) (2026-02-17)
+
+
+### Bug Fixes
+
+* fix deduplication leading to collapsed schemas ([5dc3c3b](https://github.com/camunda/camunda-schema-bundler/commit/5dc3c3b48a6226d9213bac6af1675d2c61f7450c))
+
 ## [1.3.2](https://github.com/camunda/camunda-schema-bundler/compare/v1.3.1...v1.3.2) (2026-02-17)
 
 
