@@ -1,3 +1,15 @@
+# [1.3.0](https://github.com/camunda/camunda-schema-bundler/compare/v1.2.1...v1.3.0) (2026-02-17)
+
+
+### Bug Fixes
+
+* fix deduplication logic ([e14729f](https://github.com/camunda/camunda-schema-bundler/commit/e14729f5a50aea4cb5e12d7efda59041faac409a))
+
+
+### Features
+
+* add --version ([0607b87](https://github.com/camunda/camunda-schema-bundler/commit/0607b87b0d25df3dde6126efdd91e82460e94096))
+
 ## [1.2.2](https://github.com/camunda/camunda-schema-bundler/compare/v1.2.1...v1.2.2) (2026-02-17)
 
 
