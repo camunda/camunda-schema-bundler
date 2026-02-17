@@ -463,14 +463,18 @@ export async function bundle(options: BundleOptions): Promise<BundleResult> {
     }
   }
 
-  // ── Step 4b: Fresh dedup pass ──────────────────────────────────────────────
+  // ── Step 4b: Fresh dedup pass (iterative) ──────────────────────────────────
   // Run after dereferencing so we can catch inline schemas that were created
-  // by expanding path-local $refs.
+  // by expanding path-local $refs. Iterates until convergence: each pass
+  // may replace inner schemas with $refs, changing parent signatures so that
+  // subsequent passes can match them to component schemas.
 
-  stats.freshDedupCount = freshSignatureDedup(bundled, schemas);
-  if (stats.freshDedupCount > 0) {
+  for (let dedupPass = 1; dedupPass <= 10; dedupPass++) {
+    const count = freshSignatureDedup(bundled, schemas);
+    stats.freshDedupCount += count;
+    if (count === 0) break;
     console.log(
-      `[camunda-schema-bundler] Fresh dedup replaced ${stats.freshDedupCount} inline duplicates`
+      `[camunda-schema-bundler] Fresh dedup pass ${dedupPass}: replaced ${count} inline duplicates`
     );
   }
 

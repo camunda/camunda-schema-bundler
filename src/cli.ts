@@ -41,6 +41,7 @@ interface CliArgs {
   allowLikeRefs: boolean;
   skipFetchIfExists: boolean;
   help: boolean;
+  version: boolean;
 }
 
 function parseArgs(argv: string[]): CliArgs {
@@ -51,6 +52,7 @@ function parseArgs(argv: string[]): CliArgs {
     allowLikeRefs: false,
     skipFetchIfExists: false,
     help: false,
+    version: false,
   };
 
   for (let i = 2; i < argv.length; i++) {
@@ -95,6 +97,10 @@ function parseArgs(argv: string[]): CliArgs {
       case '-h':
         args.help = true;
         break;
+      case '--version':
+      case '-v':
+        args.version = true;
+        break;
       default:
         console.error(`Unknown option: ${argv[i]}`);
         process.exit(1);
@@ -130,6 +136,7 @@ Bundle options:
   --deref-path-local        Inline remaining path-local $refs
   --allow-like-refs         Don't fail on surviving path-local $like refs
   --help, -h                Show this help
+  --version, -v             Show version
 
 Examples:
   # Fetch from upstream and bundle (simplest usage)
@@ -157,6 +164,14 @@ Examples:
 
 async function main(): Promise<void> {
   const args = parseArgs(process.argv);
+
+  if (args.version) {
+    const { createRequire } = await import('node:module');
+    const require = createRequire(import.meta.url);
+    const pkg = require('../package.json') as { version: string };
+    console.log(pkg.version);
+    return;
+  }
 
   if (args.help) {
     console.log(HELP);

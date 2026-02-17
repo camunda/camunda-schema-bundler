@@ -110,6 +110,12 @@ export function jsonPointerDecode(segment: string): string {
 
 /**
  * Resolve an internal $ref (e.g. `#/components/schemas/Foo`) against a root document.
+ *
+ * If an intermediate node along the path is itself a `$ref`, the resolver
+ * follows it first and then continues resolving the remaining segments.
+ * This handles cases where `SwaggerParser.bundle()` emits refs that point
+ * through other refs (e.g. `#/paths/.../schema/oneOf/2` where `schema` is
+ * `{ "$ref": "#/components/schemas/ResourceKey" }`).
  */
 export function resolveInternalRef(
   root: Record<string, unknown>,
@@ -119,6 +125,19 @@ export function resolveInternalRef(
   let cur: unknown = root;
   for (const seg of ref.slice(2).split('/')) {
     if (!cur || typeof cur !== 'object') return undefined;
+
+    // If the current node is itself a $ref, follow it first
+    const obj = cur as Record<string, unknown>;
+    if (
+      typeof obj['$ref'] === 'string' &&
+      (obj['$ref'] as string).startsWith('#/')
+    ) {
+      const followed = resolveInternalRef(root, obj['$ref'] as string);
+      if (followed && typeof followed === 'object') {
+        cur = followed;
+      }
+    }
+
     cur = (cur as Record<string, unknown>)[jsonPointerDecode(seg)];
   }
   return cur;
