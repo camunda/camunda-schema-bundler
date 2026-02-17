@@ -275,6 +275,11 @@ export async function bundle(options: BundleOptions): Promise<BundleResult> {
     schemaSignatureMap.set(canonicalStringify(schema), name);
   }
 
+  // Snapshot before normalization: resolveInternalRef reads from this
+  // immutable copy so that inline dedup mutations on the live document
+  // cannot destroy paths that later ref resolutions depend on.
+  const preNormSnapshot = JSON.parse(JSON.stringify(bundled));
+
   const normSeen = new Set<unknown>();
   function safeNormalize(root: unknown): void {
     if (!root || typeof root !== 'object') return;
@@ -318,7 +323,7 @@ export async function bundle(options: BundleOptions): Promise<BundleResult> {
       typeof obj['$ref'] === 'string' &&
       (obj['$ref'] as string).startsWith('#/paths/')
     ) {
-      const resolved = resolveInternalRef(bundled, obj['$ref'] as string);
+      const resolved = resolveInternalRef(preNormSnapshot, obj['$ref'] as string);
       if (resolved && typeof resolved === 'object') {
         safeNormalize(resolved);
 
@@ -368,9 +373,6 @@ export async function bundle(options: BundleOptions): Promise<BundleResult> {
       obj['$ref'] = `#/components/schemas/${target}`;
     }
   }
-
-  // Snapshot before normalization for resolving path-local refs during dereference
-  const preNormSnapshot = JSON.parse(JSON.stringify(bundled));
 
   safeNormalize(bundled);
   rewriteInternalRefs(bundled);
