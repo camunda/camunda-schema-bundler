@@ -18,6 +18,8 @@ import type {
   OperationSummary,
   OperationQueryParam,
   SchemaConstraints,
+  DeprecatedEnumSchemaEntry,
+  DeprecatedEnumMemberEntry,
 } from './types.js';
 
 const HTTP_METHODS = ['get', 'post', 'put', 'patch', 'delete', 'head', 'options', 'trace'] as const;
@@ -34,6 +36,7 @@ export function extractMetadata(
   const unions = extractUnions(schemas);
   const arrays = extractArraySchemas(schemas);
   const { eventuallyConsistentOps, operations } = extractOperations(spec);
+  const deprecatedEnumMembers = extractDeprecatedEnumMembers(schemas);
 
   return {
     schemaVersion: '1.0.0',
@@ -43,11 +46,13 @@ export function extractMetadata(
     arrays: arrays.sort((a, b) => a.name.localeCompare(b.name)),
     eventuallyConsistentOps,
     operations,
+    deprecatedEnumMembers: deprecatedEnumMembers.sort((a, b) => a.schemaName.localeCompare(b.schemaName)),
     integrity: {
       totalSemanticKeys: semanticKeys.length,
       totalUnions: unions.length,
       totalOperations: operations.length,
       totalEventuallyConsistent: eventuallyConsistentOps.length,
+      totalDeprecatedEnumSchemas: deprecatedEnumMembers.length,
     },
   };
 }
@@ -241,6 +246,46 @@ function extractArraySchemas(
   }
 
   return arrays;
+}
+
+function extractDeprecatedEnumMembers(
+  schemas: Record<string, unknown>
+): DeprecatedEnumSchemaEntry[] {
+  const results: DeprecatedEnumSchemaEntry[] = [];
+
+  for (const [name, rawSchema] of Object.entries(schemas)) {
+    const schema = rawSchema as Record<string, unknown>;
+    const deprecatedList = schema['x-deprecated-enum-members'];
+    if (!Array.isArray(deprecatedList) || deprecatedList.length === 0) continue;
+
+    const enumValues = Array.isArray(schema['enum'])
+      ? (schema['enum'] as string[])
+      : [];
+
+    const deprecatedMembers: DeprecatedEnumMemberEntry[] = [];
+    for (const entry of deprecatedList) {
+      if (!entry || typeof entry !== 'object') continue;
+      const memberName = (entry as Record<string, unknown>)['name'];
+      const version = (entry as Record<string, unknown>)['deprecatedInVersion'];
+      if (typeof memberName === 'string') {
+        deprecatedMembers.push({
+          name: memberName,
+          deprecatedInVersion: typeof version === 'string' ? version : 'unknown',
+        });
+      }
+    }
+
+    if (deprecatedMembers.length > 0) {
+      results.push({
+        schemaName: name,
+        enumValues,
+        deprecatedMembers,
+        stableId: toStableId(name),
+      });
+    }
+  }
+
+  return results;
 }
 
 function extractOperations(spec: Record<string, unknown>): {

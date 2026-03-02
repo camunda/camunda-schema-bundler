@@ -22,6 +22,8 @@ export type {
   OperationSummary,
   OperationQueryParam,
   SchemaConstraints,
+  DeprecatedEnumSchemaEntry,
+  DeprecatedEnumMemberEntry,
 } from './types.js';
 export type { FetchOptions, FetchResult } from './fetch.js';
 export {

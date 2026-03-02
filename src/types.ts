@@ -116,12 +116,16 @@ export interface SpecMetadata {
   /** All operation summaries. */
   operations: OperationSummary[];
 
+  /** Enum schemas with deprecated members (x-deprecated-enum-members). */
+  deprecatedEnumMembers: DeprecatedEnumSchemaEntry[];
+
   /** Integrity counters for validation. */
   integrity: {
     totalSemanticKeys: number;
     totalUnions: number;
     totalOperations: number;
     totalEventuallyConsistent: number;
+    totalDeprecatedEnumSchemas: number;
   };
 }
 
@@ -214,4 +218,28 @@ export interface SchemaConstraints {
   minLength?: number;
   maxLength?: number;
   format?: string;
+}
+
+// ── Deprecated enum members ──────────────────────────────────────────────────
+
+export interface DeprecatedEnumMemberEntry {
+  /** The enum member value (e.g. "UNSPECIFIED"). */
+  name: string;
+
+  /** The version in which this member was deprecated (e.g. "8.9.0"). */
+  deprecatedInVersion: string;
+}
+
+export interface DeprecatedEnumSchemaEntry {
+  /** The component schema name (e.g. "DecisionDefinitionTypeEnum"). */
+  schemaName: string;
+
+  /** All enum values defined on this schema. */
+  enumValues: string[];
+
+  /** The members marked as deprecated via x-deprecated-enum-members. */
+  deprecatedMembers: DeprecatedEnumMemberEntry[];
+
+  /** Stable kebab-case identifier for changelog / diffing. */
+  stableId: string;
 }

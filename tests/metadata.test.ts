@@ -38,6 +38,25 @@ describe('extractMetadata', () => {
       type: 'object',
       properties: { name: { type: 'string' } },
     },
+    DecisionDefinitionTypeEnum: {
+      type: 'string',
+      enum: ['DECISION_TABLE', 'LITERAL_EXPRESSION', 'UNSPECIFIED', 'UNKNOWN'],
+      'x-deprecated-enum-members': [
+        { name: 'UNSPECIFIED', deprecatedInVersion: '8.9.0' },
+      ],
+    },
+    DecisionInstanceStateEnum: {
+      type: 'string',
+      enum: ['EVALUATED', 'FAILED', 'UNSPECIFIED', 'UNKNOWN'],
+      'x-deprecated-enum-members': [
+        { name: 'UNSPECIFIED', deprecatedInVersion: '8.9.0' },
+        { name: 'UNKNOWN', deprecatedInVersion: '8.9.0' },
+      ],
+    },
+    CleanEnum: {
+      type: 'string',
+      enum: ['A', 'B'],
+    },
     TenantBody: {
       type: 'object',
       properties: {
@@ -217,6 +236,7 @@ describe('extractMetadata', () => {
     expect(metadata.integrity.totalUnions).toBe(3);
     expect(metadata.integrity.totalOperations).toBe(5);
     expect(metadata.integrity.totalEventuallyConsistent).toBe(1);
+    expect(metadata.integrity.totalDeprecatedEnumSchemas).toBe(2);
   });
 
   it('extracts operation description', () => {
@@ -284,5 +304,38 @@ describe('extractMetadata', () => {
     expect(op!.requestBodyUnionRefs).toEqual(['TenantVariantA', 'TenantVariantB']);
     expect(op!.optionalTenantIdInBody).toBe(true);
     expect(op!.bodyOnly).toBe(true);
+  });
+
+  it('extracts deprecated enum members from x-deprecated-enum-members', () => {
+    expect(metadata.deprecatedEnumMembers).toHaveLength(2);
+
+    const decType = metadata.deprecatedEnumMembers.find(
+      (e) => e.schemaName === 'DecisionDefinitionTypeEnum'
+    );
+    expect(decType).toBeDefined();
+    expect(decType!.enumValues).toEqual(['DECISION_TABLE', 'LITERAL_EXPRESSION', 'UNSPECIFIED', 'UNKNOWN']);
+    expect(decType!.deprecatedMembers).toEqual([
+      { name: 'UNSPECIFIED', deprecatedInVersion: '8.9.0' },
+    ]);
+    expect(decType!.stableId).toBe('decision-definition-type-enum');
+  });
+
+  it('extracts multiple deprecated members from a single enum', () => {
+    const decState = metadata.deprecatedEnumMembers.find(
+      (e) => e.schemaName === 'DecisionInstanceStateEnum'
+    );
+    expect(decState).toBeDefined();
+    expect(decState!.deprecatedMembers).toHaveLength(2);
+    expect(decState!.deprecatedMembers).toEqual([
+      { name: 'UNSPECIFIED', deprecatedInVersion: '8.9.0' },
+      { name: 'UNKNOWN', deprecatedInVersion: '8.9.0' },
+    ]);
+  });
+
+  it('ignores enums without x-deprecated-enum-members', () => {
+    const clean = metadata.deprecatedEnumMembers.find(
+      (e) => e.schemaName === 'CleanEnum'
+    );
+    expect(clean).toBeUndefined();
   });
 });
