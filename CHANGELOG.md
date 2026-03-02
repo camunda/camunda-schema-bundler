@@ -1,3 +1,10 @@
+# [1.5.0](https://github.com/camunda/camunda-schema-bundler/compare/v1.4.0...v1.5.0) (2026-03-02)
+
+
+### Features
+
+* support x-semantic-provider ([abf754d](https://github.com/camunda/camunda-schema-bundler/commit/abf754d7f652c886e7a570964ec00682e1a40a70))
+
 # [1.4.0](https://github.com/camunda/camunda-schema-bundler/compare/v1.3.3...v1.4.0) (2026-03-02)
 
 
