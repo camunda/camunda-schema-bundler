@@ -1,3 +1,10 @@
+# [1.4.0](https://github.com/camunda/camunda-schema-bundler/compare/v1.3.3...v1.4.0) (2026-03-02)
+
+
+### Features
+
+* support x-deprecated-enum-members. fixes [#1](https://github.com/camunda/camunda-schema-bundler/issues/1) ([3d6ed58](https://github.com/camunda/camunda-schema-bundler/commit/3d6ed58a9240b3a617814ef39d8b7aeed48837ee))
+
 ## [1.3.3](https://github.com/camunda/camunda-schema-bundler/compare/v1.3.2...v1.3.3) (2026-02-17)
 
 
