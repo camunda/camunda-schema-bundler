@@ -24,6 +24,7 @@ export type {
   SchemaConstraints,
   DeprecatedEnumSchemaEntry,
   DeprecatedEnumMemberEntry,
+  SemanticProviderEntry,
 } from './types.js';
 export type { FetchOptions, FetchResult } from './fetch.js';
 export {

@@ -119,6 +119,9 @@ export interface SpecMetadata {
   /** Enum schemas with deprecated members (x-deprecated-enum-members). */
   deprecatedEnumMembers: DeprecatedEnumSchemaEntry[];
 
+  /** Schemas annotated with x-semantic-provider (result schemas with identity fields). */
+  semanticProviders: SemanticProviderEntry[];
+
   /** Integrity counters for validation. */
   integrity: {
     totalSemanticKeys: number;
@@ -126,6 +129,7 @@ export interface SpecMetadata {
     totalOperations: number;
     totalEventuallyConsistent: number;
     totalDeprecatedEnumSchemas: number;
+    totalSemanticProviders: number;
   };
 }
 
@@ -221,6 +225,17 @@ export interface SchemaConstraints {
 }
 
 // ── Deprecated enum members ──────────────────────────────────────────────────
+
+export interface SemanticProviderEntry {
+  /** The component schema name (e.g. "CreateProcessInstanceResult"). */
+  schemaName: string;
+
+  /** Property names listed in x-semantic-provider. */
+  providers: string[];
+
+  /** Stable kebab-case identifier for changelog / diffing. */
+  stableId: string;
+}
 
 export interface DeprecatedEnumMemberEntry {
   /** The enum member value (e.g. "UNSPECIFIED"). */

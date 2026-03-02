@@ -89,6 +89,29 @@ describe('extractMetadata', () => {
         { $ref: '#/components/schemas/TenantVariantB' },
       ],
     },
+    CreateProcessInstanceResult: {
+      type: 'object',
+      'x-semantic-provider': ['processInstanceKey'],
+      properties: {
+        processInstanceKey: { type: 'string' },
+        processDefinitionId: { type: 'string' },
+      },
+    },
+    FormResult: {
+      type: 'object',
+      'x-semantic-provider': ['formId', 'formKey'],
+      properties: {
+        formId: { type: 'string' },
+        formKey: { type: 'string' },
+        version: { type: 'integer' },
+      },
+    },
+    NoProviderSchema: {
+      type: 'object',
+      properties: {
+        id: { type: 'string' },
+      },
+    },
   };
 
   const spec: Record<string, unknown> = {
@@ -237,6 +260,7 @@ describe('extractMetadata', () => {
     expect(metadata.integrity.totalOperations).toBe(5);
     expect(metadata.integrity.totalEventuallyConsistent).toBe(1);
     expect(metadata.integrity.totalDeprecatedEnumSchemas).toBe(2);
+    expect(metadata.integrity.totalSemanticProviders).toBe(2);
   });
 
   it('extracts operation description', () => {
@@ -337,5 +361,31 @@ describe('extractMetadata', () => {
       (e) => e.schemaName === 'CleanEnum'
     );
     expect(clean).toBeUndefined();
+  });
+
+  it('extracts semantic providers from x-semantic-provider', () => {
+    expect(metadata.semanticProviders).toHaveLength(2);
+
+    const createResult = metadata.semanticProviders.find(
+      (p) => p.schemaName === 'CreateProcessInstanceResult'
+    );
+    expect(createResult).toBeDefined();
+    expect(createResult!.providers).toEqual(['processInstanceKey']);
+    expect(createResult!.stableId).toBe('create-process-instance-result');
+  });
+
+  it('extracts multiple providers from a single schema', () => {
+    const form = metadata.semanticProviders.find(
+      (p) => p.schemaName === 'FormResult'
+    );
+    expect(form).toBeDefined();
+    expect(form!.providers).toEqual(['formId', 'formKey']);
+  });
+
+  it('ignores schemas without x-semantic-provider', () => {
+    const noProvider = metadata.semanticProviders.find(
+      (p) => p.schemaName === 'NoProviderSchema'
+    );
+    expect(noProvider).toBeUndefined();
   });
 });

@@ -20,6 +20,7 @@ import type {
   SchemaConstraints,
   DeprecatedEnumSchemaEntry,
   DeprecatedEnumMemberEntry,
+  SemanticProviderEntry,
 } from './types.js';
 
 const HTTP_METHODS = ['get', 'post', 'put', 'patch', 'delete', 'head', 'options', 'trace'] as const;
@@ -37,6 +38,7 @@ export function extractMetadata(
   const arrays = extractArraySchemas(schemas);
   const { eventuallyConsistentOps, operations } = extractOperations(spec);
   const deprecatedEnumMembers = extractDeprecatedEnumMembers(schemas);
+  const semanticProviders = extractSemanticProviders(schemas);
 
   return {
     schemaVersion: '1.0.0',
@@ -47,12 +49,14 @@ export function extractMetadata(
     eventuallyConsistentOps,
     operations,
     deprecatedEnumMembers: deprecatedEnumMembers.sort((a, b) => a.schemaName.localeCompare(b.schemaName)),
+    semanticProviders: semanticProviders.sort((a, b) => a.schemaName.localeCompare(b.schemaName)),
     integrity: {
       totalSemanticKeys: semanticKeys.length,
       totalUnions: unions.length,
       totalOperations: operations.length,
       totalEventuallyConsistent: eventuallyConsistentOps.length,
       totalDeprecatedEnumSchemas: deprecatedEnumMembers.length,
+      totalSemanticProviders: semanticProviders.length,
     },
   };
 }
@@ -283,6 +287,31 @@ function extractDeprecatedEnumMembers(
         stableId: toStableId(name),
       });
     }
+  }
+
+  return results;
+}
+
+function extractSemanticProviders(
+  schemas: Record<string, unknown>
+): SemanticProviderEntry[] {
+  const results: SemanticProviderEntry[] = [];
+
+  for (const [name, rawSchema] of Object.entries(schemas)) {
+    const schema = rawSchema as Record<string, unknown>;
+    const providers = schema['x-semantic-provider'];
+    if (!Array.isArray(providers) || providers.length === 0) continue;
+
+    const validProviders = providers.filter(
+      (p): p is string => typeof p === 'string'
+    );
+    if (validProviders.length === 0) continue;
+
+    results.push({
+      schemaName: name,
+      providers: validProviders,
+      stableId: toStableId(name),
+    });
   }
 
   return results;
