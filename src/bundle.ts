@@ -217,6 +217,30 @@ const DEFAULT_MANUAL_OVERRIDES: Record<string, string> = {
 };
 
 /**
+ * Detect whether a bundled OpenAPI document is a monolithic (single-file) spec.
+ *
+ * A spec is considered monolithic if the entry file contains no external file
+ * $ref patterns (i.e., `$ref:` values pointing to `.yaml` or `.yml` files).
+ * Pre-8.9 specs are always single self-contained files with no external deps.
+ *
+ * For the augmentation step (Step 2), we use this to decide whether to scan
+ * sibling YAML files. Monolithic specs are already complete; scanning sibling
+ * files risks pulling in unrelated schemas (e.g. rest-api-v1.yaml on pre-8.9
+ * branches).
+ */
+function isMonolithicEntryFile(entryPath: string): boolean {
+  try {
+    const content = fs.readFileSync(entryPath, 'utf8');
+    // Match $ref values that reference external .yaml/.yml files.
+    // Pattern: $ref: (with optional quotes) followed by a relative path to a yaml file.
+    // This checks specifically for $ref syntax rather than any occurrence of the string.
+    return !(/\$ref\s*:\s*['"]?[^'"#\s]*\.ya?ml#/m).test(content);
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Bundle the multi-file OpenAPI spec into a single normalized JSON document.
  */
 export async function bundle(options: BundleOptions): Promise<BundleResult> {
@@ -245,39 +269,51 @@ export async function bundle(options: BundleOptions): Promise<BundleResult> {
 
   // ── Step 1: Bundle multi-file YAML into a single document ─────────────────
 
+  const isMonolithic = isMonolithicEntryFile(entryPath);
+  if (isMonolithic) {
+    console.log(
+      `[camunda-schema-bundler] Detected monolithic spec (pre-8.9) at ${entryPath}`
+    );
+  }
+
   const bundled = (await SwaggerParser.bundle(entryPath)) as Record<
     string,
     unknown
   >;
 
   // ── Step 2: Augment with missing schemas from all upstream YAML files ─────
+  // Skipped for monolithic specs: a single self-contained file already has all
+  // its schemas inline, and scanning sibling files risks pulling in unrelated
+  // schemas (e.g. rest-api-v1.yaml on pre-8.9 branches).
 
   const components = ensureComponents(bundled);
   const schemas = components['schemas'] as Record<string, unknown>;
 
-  const allFiles = listFilesRecursive(options.specDir);
-  for (const file of allFiles) {
-    if (!file.endsWith('.yaml') && !file.endsWith('.yml')) continue;
-    try {
-      const content = fs.readFileSync(file, 'utf8');
-      const doc = parseYaml(content) as Record<string, unknown> | null;
-      const docComponents = doc?.['components'] as
-        | Record<string, unknown>
-        | undefined;
-      const docSchemas = docComponents?.['schemas'] as
-        | Record<string, unknown>
-        | undefined;
-      if (!docSchemas) continue;
-      for (const [name, schema] of Object.entries(docSchemas)) {
-        if (!schemas[name]) {
-          const s = JSON.parse(JSON.stringify(schema));
-          rewriteExternalRefsToLocal(s);
-          schemas[name] = s;
-          stats.augmentedSchemaCount++;
+  if (!isMonolithic) {
+    const allFiles = listFilesRecursive(options.specDir);
+    for (const file of allFiles) {
+      if (!file.endsWith('.yaml') && !file.endsWith('.yml')) continue;
+      try {
+        const content = fs.readFileSync(file, 'utf8');
+        const doc = parseYaml(content) as Record<string, unknown> | null;
+        const docComponents = doc?.['components'] as
+          | Record<string, unknown>
+          | undefined;
+        const docSchemas = docComponents?.['schemas'] as
+          | Record<string, unknown>
+          | undefined;
+        if (!docSchemas) continue;
+        for (const [name, schema] of Object.entries(docSchemas)) {
+          if (!schemas[name]) {
+            const s = JSON.parse(JSON.stringify(schema));
+            rewriteExternalRefsToLocal(s);
+            schemas[name] = s;
+            stats.augmentedSchemaCount++;
+          }
         }
+      } catch {
+        // Skip unparseable files
       }
-    } catch {
-      // Skip unparseable files
     }
   }
 
