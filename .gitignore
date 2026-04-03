@@ -2,3 +2,5 @@ node_modules/
 dist/
 bin/
 *.tsbuildinfo
+.tmp-clone-*
+external-spec/
