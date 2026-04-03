@@ -227,11 +227,11 @@ describe('multi-file spec bundling (8.9+ regression guard)', () => {
   });
 
   it('preserves path count', () => {
-    expect(result.stats.pathCount).toBe(2); // /process-instances and /process-instances/{processInstanceKey}
+    expect(result.stats.pathCount).toBe(2); // 2 path items: /process-instances and /process-instances/{processInstanceKey}
   });
 
   it('reports correct schema count including external schemas', () => {
-    // 5 from external files + 1 inline in entry = 6 total minimum
+    // 4 from definitions.yaml + 1 from errors.yaml + 1 inline in entry = 6 total minimum
     expect(result.stats.schemaCount).toBeGreaterThanOrEqual(6);
   });
 
@@ -263,21 +263,83 @@ describe('multi-file spec bundling (8.9+ regression guard)', () => {
     expect(opIds).toContain('getProcessInstance');
   });
 
-  it('augments schemas from sibling YAML files in specDir', () => {
-    // The augmentation step scans all YAML files in the spec dir
+  it('augments schemas from sibling YAML files in specDir for multi-file specs', () => {
+    // In multi-file mode, the augmentation step scans all YAML files in the spec dir
     // and adds any component schemas not already in the bundled output.
-    // This is the key behavior of multi-file bundling step 2.
+    // Since our test spec references external files, it IS a multi-file spec.
     expect(result.stats.schemaCount).toBeGreaterThanOrEqual(6);
   });
 });
 
 describe('multi-file spec with augmentation from separate YAML files', () => {
-  it('augments bundled spec with schemas from sibling YAML files', async () => {
+  it('augments bundled spec with schemas from sibling YAML files (multi-file)', async () => {
     const dir = fs.mkdtempSync(
       path.join(os.tmpdir(), 'bundler-augment-test-')
     );
 
-    // Entry file that does NOT reference schemas in the sidecar file
+    // A referenced schema file
+    const referencedYaml = `
+components:
+  schemas:
+    Item:
+      type: object
+      properties:
+        id:
+          type: string
+`.trimStart();
+
+    // A sidecar file with additional schemas NOT referenced from entry
+    const sidecarYaml = `
+components:
+  schemas:
+    ExtraSchema:
+      type: object
+      properties:
+        name:
+          type: string
+`.trimStart();
+
+    // Entry file that references the schemas file (making it multi-file)
+    const entry = `
+openapi: '3.0.3'
+info:
+  title: Test
+  version: '1.0.0'
+paths:
+  /items:
+    get:
+      operationId: listItems
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: './schemas.yaml#/components/schemas/Item'
+`.trimStart();
+
+    fs.writeFileSync(path.join(dir, 'rest-api.yaml'), entry, 'utf8');
+    fs.writeFileSync(path.join(dir, 'schemas.yaml'), referencedYaml, 'utf8');
+    fs.writeFileSync(path.join(dir, 'extra.yaml'), sidecarYaml, 'utf8');
+
+    const result = await bundle({ specDir: dir });
+    const schemas = (
+      result.spec as { components: { schemas: Record<string, unknown> } }
+    ).components.schemas;
+
+    // Item should be in components from the referenced file
+    expect(schemas['Item']).toBeDefined();
+    // ExtraSchema should be augmented in from the sidecar file (multi-file augmentation)
+    expect(schemas['ExtraSchema']).toBeDefined();
+    expect(result.stats.augmentedSchemaCount).toBeGreaterThan(0);
+  });
+
+  it('does NOT augment schemas from sibling files for monolithic specs', async () => {
+    const dir = fs.mkdtempSync(
+      path.join(os.tmpdir(), 'bundler-monolithic-no-augment-')
+    );
+
+    // Entry file with no external refs (monolithic)
     const entry = `
 openapi: '3.0.3'
 info:
@@ -299,28 +361,30 @@ components:
           type: string
 `.trimStart();
 
-    // A sidecar file with additional schemas NOT referenced from entry
-    const sidecar = `
+    // A sidecar file with additional schemas that should NOT be merged in
+    const sidecarYaml = `
 components:
   schemas:
-    ExtraSchema:
+    UnrelatedSchema:
       type: object
       properties:
-        name:
+        unrelated:
           type: string
 `.trimStart();
 
     fs.writeFileSync(path.join(dir, 'rest-api.yaml'), entry, 'utf8');
-    fs.writeFileSync(path.join(dir, 'extra.yaml'), sidecar, 'utf8');
+    fs.writeFileSync(path.join(dir, 'unrelated.yaml'), sidecarYaml, 'utf8');
 
     const result = await bundle({ specDir: dir });
     const schemas = (
       result.spec as { components: { schemas: Record<string, unknown> } }
     ).components.schemas;
 
-    // ExtraSchema should be augmented in from the sidecar file
-    expect(schemas['ExtraSchema']).toBeDefined();
-    expect(result.stats.augmentedSchemaCount).toBeGreaterThan(0);
+    // Item should be present (from the entry file itself)
+    expect(schemas['Item']).toBeDefined();
+    // UnrelatedSchema should NOT be pulled in (monolithic spec skips augmentation)
+    expect(schemas['UnrelatedSchema']).toBeUndefined();
+    expect(result.stats.augmentedSchemaCount).toBe(0);
   });
 });
 

@@ -24,7 +24,7 @@
  */
 import path from 'node:path';
 import { bundle } from './bundle.js';
-import { fetchSpec, DEFAULT_SPEC_DIR } from './fetch.js';
+import { fetchSpec, DEFAULT_SPEC_DIR, specDirForRef } from './fetch.js';
 import { detectUpstreamRef } from './detect-ref.js';
 
 interface CliArgs {
@@ -196,9 +196,10 @@ async function main(): Promise<void> {
     }
 
     // Fetch mode (explicit --fetch or default when no --spec-dir)
+    const resolvedSpecDir = specDirForRef(ref ?? 'main');
     const outputDir =
       args.outputDir ??
-      path.join('external-spec', 'upstream', DEFAULT_SPEC_DIR);
+      path.join('external-spec', 'upstream', resolvedSpecDir);
 
     console.log(
       `[camunda-schema-bundler] Fetching spec (ref: ${ref ?? 'main'})...`

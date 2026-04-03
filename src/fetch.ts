@@ -45,7 +45,27 @@ export interface FetchResult {
 const DEFAULT_REPO_URL = 'https://github.com/camunda/camunda.git';
 const DEFAULT_REF = 'main';
 const DEFAULT_SPEC_DIR = 'zeebe/gateway-protocol/src/main/proto/v2';
+const MONOLITHIC_SPEC_DIR = 'zeebe/gateway-protocol/src/main/proto';
 const DEFAULT_ENTRY_FILE = 'rest-api.yaml';
+
+/**
+ * Determine the upstream spec directory for a given git ref.
+ *
+ * - `stable/8.5` through `stable/8.8` → monolithic single-file spec at `.../proto`
+ * - `main`, `stable/8.9+`, tags, SHAs → multi-file spec at `.../proto/v2`
+ *
+ * An explicit `specDir` option always wins over this heuristic.
+ */
+export function specDirForRef(ref: string): string {
+  const match = /^stable\/8\.(\d+)$/.exec(ref);
+  if (match) {
+    const minor = parseInt(match[1], 10);
+    if (minor < 9) {
+      return MONOLITHIC_SPEC_DIR;
+    }
+  }
+  return DEFAULT_SPEC_DIR;
+}
 
 /**
  * Fetch the upstream spec via sparse git clone.
@@ -57,7 +77,7 @@ const DEFAULT_ENTRY_FILE = 'rest-api.yaml';
 export async function fetchSpec(options: FetchOptions): Promise<FetchResult> {
   const repoUrl = options.repoUrl ?? DEFAULT_REPO_URL;
   const ref = options.ref ?? DEFAULT_REF;
-  const specDir = options.specDir ?? DEFAULT_SPEC_DIR;
+  const specDir = options.specDir ?? specDirForRef(ref);
   const entryFile = options.entryFile ?? DEFAULT_ENTRY_FILE;
   const outputDir = resolve(options.outputDir);
 
@@ -106,4 +126,4 @@ export async function fetchSpec(options: FetchOptions): Promise<FetchResult> {
   }
 }
 
-export { DEFAULT_REPO_URL, DEFAULT_REF, DEFAULT_SPEC_DIR, DEFAULT_ENTRY_FILE };
+export { DEFAULT_REPO_URL, DEFAULT_REF, DEFAULT_SPEC_DIR, MONOLITHIC_SPEC_DIR, DEFAULT_ENTRY_FILE };
