@@ -1,3 +1,10 @@
+# [1.6.0](https://github.com/camunda/camunda-schema-bundler/compare/v1.5.0...v1.6.0) (2026-04-03)
+
+
+### Features
+
+* support pre-8.9 monolithic OpenAPI specifications ([ab40756](https://github.com/camunda/camunda-schema-bundler/commit/ab40756a9dd1b8f85f91fb743581fdd3914e8ef7))
+
 # [1.5.0](https://github.com/camunda/camunda-schema-bundler/compare/v1.4.0...v1.5.0) (2026-03-02)
 
 
