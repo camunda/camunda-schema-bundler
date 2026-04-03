@@ -1,3 +1,10 @@
+## [1.6.1](https://github.com/camunda/camunda-schema-bundler/compare/v1.6.0...v1.6.1) (2026-04-03)
+
+
+### Bug Fixes
+
+* remove accidentally committed .tmp-clone gitlink ([d15ff4f](https://github.com/camunda/camunda-schema-bundler/commit/d15ff4f245a9c96c0d9a69450246665d011ba60e))
+
 # [1.6.0](https://github.com/camunda/camunda-schema-bundler/compare/v1.5.0...v1.6.0) (2026-04-03)
 
 
