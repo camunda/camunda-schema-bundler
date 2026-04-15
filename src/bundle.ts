@@ -21,7 +21,7 @@ import {
   structuralStringify,
   findPathLocalLikeRefs,
 } from './helpers.js';
-import type { BundleOptions, BundleResult, BundleStats } from './types.js';
+import type { BundleOptions, BundleResult, BundleStats, EndpointMapEntry } from './types.js';
 import { extractMetadata } from './metadata.js';
 
 /**
@@ -317,6 +317,10 @@ export async function bundle(options: BundleOptions): Promise<BundleResult> {
     }
   }
 
+  // ── Step 2b: Build endpoint map (path → source file) ──────────────────────
+
+  const endpointMap = buildEndpointMap(options.specDir, entryFile, isMonolithic);
+
   // ── Step 3: Normalize path-local $refs via signature matching ─────────────
 
   const componentValues = new Set(Object.values(schemas));
@@ -576,7 +580,69 @@ export async function bundle(options: BundleOptions): Promise<BundleResult> {
     );
   }
 
-  return { spec: bundled, metadata, stats };
+  if (options.outputEndpointMap) {
+    const dir = path.dirname(options.outputEndpointMap);
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(
+      options.outputEndpointMap,
+      JSON.stringify(endpointMap, null, 2) + '\n',
+      'utf8'
+    );
+  }
+
+  return { spec: bundled, metadata, endpointMap, stats };
+}
+
+/**
+ * Build a map of API path → source YAML file by scanning all YAML files
+ * in the spec directory for `paths` definitions.
+ *
+ * For monolithic specs (pre-8.9), all paths come from the entry file.
+ */
+function buildEndpointMap(
+  specDir: string,
+  entryFile: string,
+  isMonolithic: boolean
+): EndpointMapEntry[] {
+  const HTTP_METHODS = new Set([
+    'get', 'put', 'post', 'delete', 'options', 'head', 'patch', 'trace',
+  ]);
+  const endpointMap: EndpointMapEntry[] = [];
+  const pathsSeen = new Set<string>();
+
+  const allFiles = isMonolithic ? [path.join(specDir, entryFile)] : listFilesRecursive(specDir);
+
+  for (const file of allFiles) {
+    if (!file.endsWith('.yaml') && !file.endsWith('.yml')) continue;
+    try {
+      const content = fs.readFileSync(file, 'utf8');
+      const doc = parseYaml(content) as Record<string, unknown> | null;
+      const docPaths = doc?.['paths'] as Record<string, unknown> | undefined;
+      if (!docPaths) continue;
+
+      const relFile = path.relative(specDir, file);
+
+      for (const [apiPath, pathItem] of Object.entries(docPaths)) {
+        if (!pathItem || typeof pathItem !== 'object') continue;
+        const methods = Object.keys(pathItem as Record<string, unknown>).filter(k => HTTP_METHODS.has(k));
+        if (methods.length === 0) continue; // skip $ref-only entries (no HTTP methods)
+        if (pathsSeen.has(apiPath)) continue;
+        pathsSeen.add(apiPath);
+
+        for (const key of methods.sort()) {
+          endpointMap.push({
+            operation: `${key.toUpperCase()} ${apiPath}`,
+            sourceFile: relFile,
+          });
+        }
+      }
+    } catch {
+      // Skip unparseable files
+    }
+  }
+
+  endpointMap.sort((a, b) => a.operation.localeCompare(b.operation));
+  return endpointMap;
 }
 
 function ensureComponents(

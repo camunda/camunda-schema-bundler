@@ -17,8 +17,7 @@
  * Bundle options:
  *   --entry-file <name>       Entry YAML file name (default: rest-api.yaml)
  *   --output-spec <path>      Output path for bundled JSON spec
- *   --output-metadata <path>  Output path for metadata IR JSON
- *   --deref-path-local        Inline remaining path-local $refs (for Microsoft.OpenApi)
+ *   --output-metadata <path>  Output path for metadata IR JSON  --output-endpoint-map <path>  Output path for endpoint map JSON *   --deref-path-local        Inline remaining path-local $refs (for Microsoft.OpenApi)
  *   --allow-like-refs         Don't fail on surviving path-local $like refs
  *   --help                    Show help
  */
@@ -37,6 +36,7 @@ interface CliArgs {
   entryFile?: string;
   outputSpec?: string;
   outputMetadata?: string;
+  outputEndpointMap?: string;
   derefPathLocal: boolean;
   allowLikeRefs: boolean;
   skipFetchIfExists: boolean;
@@ -83,6 +83,9 @@ function parseArgs(argv: string[]): CliArgs {
         break;
       case '--output-metadata':
         args.outputMetadata = argv[++i];
+        break;
+      case '--output-endpoint-map':
+        args.outputEndpointMap = argv[++i];
         break;
       case '--deref-path-local':
         args.derefPathLocal = true;
@@ -233,6 +236,7 @@ async function main(): Promise<void> {
     entryFile: args.entryFile,
     outputSpec: args.outputSpec,
     outputMetadata: args.outputMetadata,
+    outputEndpointMap: args.outputEndpointMap,
     dereferencePathLocalRefs: args.derefPathLocal,
     allowPathLocalLikeRefs: args.allowLikeRefs,
   });
@@ -275,6 +279,11 @@ async function main(): Promise<void> {
   if (args.outputMetadata) {
     console.log(
       `[camunda-schema-bundler] Metadata written to ${args.outputMetadata}`
+    );
+  }
+  if (args.outputEndpointMap) {
+    console.log(
+      `[camunda-schema-bundler] Endpoint map written to ${args.outputEndpointMap} (${result.endpointMap.length} endpoints)`
     );
   }
 }

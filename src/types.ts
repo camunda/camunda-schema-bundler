@@ -26,6 +26,9 @@ export interface FetchAndBundleOptions {
   /** Output path for the metadata IR JSON. */
   outputMetadata?: string;
 
+  /** Output path for the endpoint map JSON (path → source file). */
+  outputEndpointMap?: string;
+
   /** Manual ref overrides. */
   manualOverrides?: Record<string, string>;
 
@@ -51,6 +54,9 @@ export interface BundleOptions {
 
   /** Output path for the metadata IR JSON. */
   outputMetadata?: string;
+
+  /** Output path for the endpoint map JSON (path → source file). */
+  outputEndpointMap?: string;
 
   /**
    * Manual ref overrides: map of path-local $ref → component schema name.
@@ -79,8 +85,18 @@ export interface BundleResult {
   /** Extracted metadata / intermediate representation. */
   metadata: SpecMetadata;
 
+  /** Map of API path → source YAML file (relative to specDir). */
+  endpointMap: EndpointMapEntry[];
+
   /** Stats about the bundling process. */
   stats: BundleStats;
+}
+
+export interface EndpointMapEntry {
+  /** HTTP method and path combined (e.g. "POST /authorizations/{authorizationKey}"). */
+  operation: string;
+  /** Source YAML file relative to specDir. */
+  sourceFile: string;
 }
 
 export interface BundleStats {
