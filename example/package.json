@@ -1,0 +1,13 @@
+{
+  "name": "camunda-schema-bundler-example",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "tsx index.ts",
+    "start:cli": "camunda-schema-bundler --output-spec output/rest-api.bundle.json --output-metadata output/spec-metadata.json --output-endpoint-map output/endpoint-map.json"
+  },
+  "devDependencies": {
+    "tsx": "^4.0.0"
+  }
+}
