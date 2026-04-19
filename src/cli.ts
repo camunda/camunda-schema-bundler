@@ -17,7 +17,9 @@
  * Bundle options:
  *   --entry-file <name>       Entry YAML file name (default: rest-api.yaml)
  *   --output-spec <path>      Output path for bundled JSON spec
- *   --output-metadata <path>  Output path for metadata IR JSON  --output-endpoint-map <path>  Output path for endpoint map JSON *   --deref-path-local        Inline remaining path-local $refs (for Microsoft.OpenApi)
+ *   --output-metadata <path>  Output path for metadata IR JSON
+ *   --output-endpoint-map <path>  Output path for endpoint map JSON
+ *   --deref-path-local        Inline remaining path-local $refs (for Microsoft.OpenApi)
  *   --allow-like-refs         Don't fail on surviving path-local $like refs
  *   --help                    Show help
  */
@@ -136,6 +138,7 @@ Bundle options:
   --entry-file <name>       Entry YAML file name (default: rest-api.yaml)
   --output-spec <path>      Output path for bundled JSON spec
   --output-metadata <path>  Output path for metadata IR JSON
+  --output-endpoint-map <path>  Output path for endpoint map JSON
   --deref-path-local        Inline remaining path-local $refs
   --allow-like-refs         Don't fail on surviving path-local $like refs
   --help, -h                Show this help

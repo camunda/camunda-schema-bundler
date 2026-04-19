@@ -57,8 +57,9 @@ npm run start:cli
 === Endpoint Map (140 endpoints) ===
 
   process-instance.yaml (12 endpoints):
-    GET, POST             /process-instances
-    POST                  /process-instances/search
+    GET /process-instances
+    POST /process-instances
+    POST /process-instances/search
     ...
 
   ... and more source files

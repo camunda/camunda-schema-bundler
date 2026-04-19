@@ -495,8 +495,8 @@ paths:
 
     const result = await bundle({ specDir: dir });
 
-    // /health(get) + /orders(get,post) + /orders/{id}(get) + /products(get) + /products/{id}(get) = 7
-    expect(result.endpointMap.length).toBe(7);
+    // /health(get) + /orders(get,post) + /orders/{id}(get) + /products(get) + /products/{id}(get) = 6
+    expect(result.endpointMap.length).toBe(6);
 
     const ops = result.endpointMap.map((e) => e.operation);
     expect(ops).toContain('GET /health');

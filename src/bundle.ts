@@ -594,10 +594,11 @@ export async function bundle(options: BundleOptions): Promise<BundleResult> {
 }
 
 /**
- * Build a map of API path → source YAML file by scanning all YAML files
- * in the spec directory for `paths` definitions.
+ * Build a map of HTTP method + API path → source YAML file by scanning all
+ * YAML files in the spec directory for `paths` definitions and emitting one
+ * entry per HTTP operation on each path.
  *
- * For monolithic specs (pre-8.9), all paths come from the entry file.
+ * For monolithic specs (pre-8.9), all operations come from the entry file.
  */
 function buildEndpointMap(
   specDir: string,
@@ -641,7 +642,17 @@ function buildEndpointMap(
     }
   }
 
-  endpointMap.sort((a, b) => a.operation.localeCompare(b.operation));
+  // Sort by path first, then HTTP method, so consumers can scan endpoints
+  // path-by-path regardless of which methods each path defines.
+  endpointMap.sort((a, b) => {
+    const [methodA, ...pathPartsA] = a.operation.split(' ');
+    const [methodB, ...pathPartsB] = b.operation.split(' ');
+    const pathA = pathPartsA.join(' ');
+    const pathB = pathPartsB.join(' ');
+    const byPath = pathA.localeCompare(pathB);
+    if (byPath !== 0) return byPath;
+    return methodA.localeCompare(methodB);
+  });
   return endpointMap;
 }
 

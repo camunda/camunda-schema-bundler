@@ -17,7 +17,7 @@ This utility solves all of these problems and produces two outputs:
 
 1. **Bundled spec** (`rest-api.bundle.json`) — A single, clean OpenAPI 3 JSON file with all schemas as proper `#/components/schemas/...` refs
 2. **Metadata IR** (`spec-metadata.json`) — A structured intermediate representation of domain-specific information extracted from the spec
-3. **Endpoint map** (`endpoint-map.json`) — A mapping of each API path to its source YAML file, useful for tracing endpoints back to their origin
+3. **Endpoint map** (`endpoint-map.json`) — A mapping of each API operation (method + path) to its source YAML file, useful for tracing endpoints back to their origin
 
 ## Installation
 
