@@ -326,13 +326,23 @@ export async function bundle(options: BundleOptions): Promise<BundleResult> {
         }
       }
 
-      // Collect endpoint map entries
+      // Collect endpoint map entries.
+      // Only include operations that actually made it into the bundled spec
+      // (`bundled.paths`), so sidecar/unreferenced YAMLs in `specDir` don't
+      // leak endpoints into the map.
       const docPaths = doc?.['paths'] as Record<string, unknown> | undefined;
       if (docPaths) {
         const relFile = path.relative(options.specDir, file).split(path.sep).join(path.posix.sep);
+        const bundledPaths = (bundled['paths'] as Record<string, unknown> | undefined) ?? {};
         for (const [apiPath, pathItem] of Object.entries(docPaths)) {
           if (!pathItem || typeof pathItem !== 'object') continue;
-          const methods = Object.keys(pathItem as Record<string, unknown>).filter(k => HTTP_METHODS.has(k));
+          const bundledPathItem = bundledPaths[apiPath];
+          if (!bundledPathItem || typeof bundledPathItem !== 'object') continue;
+          const bundledMethods = new Set(
+            Object.keys(bundledPathItem as Record<string, unknown>).filter(k => HTTP_METHODS.has(k))
+          );
+          const methods = Object.keys(pathItem as Record<string, unknown>)
+            .filter(k => HTTP_METHODS.has(k) && bundledMethods.has(k));
           if (methods.length === 0) continue;
           for (const key of methods.sort()) {
             const op = `${key.toUpperCase()} ${apiPath}`;

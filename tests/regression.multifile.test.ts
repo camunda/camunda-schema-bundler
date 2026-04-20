@@ -470,7 +470,10 @@ paths:
           description: OK
 `.trimStart();
 
-    // Entry file referencing the other YAML files (making it multi-file)
+    // Entry file referencing the other YAML files (making it multi-file).
+    // Path-level $refs cause SwaggerParser.bundle() to inline the referenced
+    // path items into the bundled spec, so all six operations end up in
+    // `bundled.paths` (which `endpointMap` mirrors).
     const entryYaml = `
 openapi: '3.0.3'
 info:
@@ -483,10 +486,14 @@ paths:
       responses:
         '200':
           description: OK
-          content:
-            application/json:
-              schema:
-                $ref: './orders.yaml#/paths/~1orders/get/responses/200'
+  /orders:
+    $ref: './orders.yaml#/paths/~1orders'
+  /orders/{orderId}:
+    $ref: './orders.yaml#/paths/~1orders~1{orderId}'
+  /products:
+    $ref: './products.yaml#/paths/~1products'
+  /products/{productId}:
+    $ref: './products.yaml#/paths/~1products~1{productId}'
 `.trimStart();
 
     fs.writeFileSync(path.join(dir, 'rest-api.yaml'), entryYaml, 'utf8');
