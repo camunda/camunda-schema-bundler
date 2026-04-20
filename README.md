@@ -286,7 +286,7 @@ See the [example/](example/) folder for a minimal standalone app that fetches, b
 ```bash
 cd example
 npm install
-npm start
+npm start  # `prestart` builds the parent package first
 ```
 
 ## Development

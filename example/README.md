@@ -11,6 +11,10 @@ npm install
 npm start
 ```
 
+> The `npm start` script automatically builds the parent `camunda-schema-bundler`
+> package first (via a `prestart` hook), so this works from a fresh checkout
+> without manually running `npm run build` in the repo root.
+
 This will:
 
 1. Fetch the upstream Camunda OpenAPI spec from `main`

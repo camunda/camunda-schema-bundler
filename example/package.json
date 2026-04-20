@@ -4,8 +4,11 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "build:parent": "npm --prefix .. run build",
+    "prestart": "npm run build:parent",
+    "prestart:cli": "npm run build:parent",
     "start": "tsx index.ts",
-    "start:cli": "camunda-schema-bundler --output-spec output/rest-api.bundle.json --output-metadata output/spec-metadata.json --output-endpoint-map output/endpoint-map.json"
+    "start:cli": "node ../dist/cli.js --output-spec output/rest-api.bundle.json --output-metadata output/spec-metadata.json --output-endpoint-map output/endpoint-map.json"
   },
   "dependencies": {
     "camunda-schema-bundler": "file:.."
