@@ -86,7 +86,7 @@ export interface BundleResult {
   metadata: SpecMetadata;
 
   /** Map of HTTP operation (method + path) → source YAML file (relative to specDir). */
-  endpointMap: EndpointMapEntry[];
+  endpointMap?: EndpointMapEntry[];
 
   /** Stats about the bundling process. */
   stats: BundleStats;
