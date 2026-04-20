@@ -28,11 +28,12 @@ console.log(`  Eventually consistent:   ${result.metadata.integrity.totalEventua
 
 // ── Endpoint Map ─────────────────────────────────────────────────────────────
 
-console.log(`\n=== Endpoint Map (${result.endpointMap.length} endpoints) ===`);
+const endpointMap = result.endpointMap ?? [];
+console.log(`\n=== Endpoint Map (${endpointMap.length} endpoints) ===`);
 
 // Group endpoints by source file
 const byFile = new Map<string, EndpointMapEntry[]>();
-for (const entry of result.endpointMap) {
+for (const entry of endpointMap) {
   const list = byFile.get(entry.sourceFile) ?? [];
   list.push(entry);
   byFile.set(entry.sourceFile, list);
