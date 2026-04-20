@@ -1,3 +1,27 @@
+# [1.7.0](https://github.com/camunda/camunda-schema-bundler/compare/v1.6.1...v1.7.0) (2026-04-20)
+
+
+### Bug Fixes
+
+* added stray yaml checks ([c65b69d](https://github.com/camunda/camunda-schema-bundler/commit/c65b69def9c38d2bb6548957d3447442262a838e))
+* address PR review — filter endpointMap to bundled paths and make field required ([8fe3886](https://github.com/camunda/camunda-schema-bundler/commit/8fe38860cabed8207eaa380e1d6722ff06a749d7))
+* address PR review — make example runnable from a clean checkout ([2ad31c7](https://github.com/camunda/camunda-schema-bundler/commit/2ad31c7a6c44fe8fe0cbd3c834296813931499bf))
+* Changed sort comparator, updated README.md and fixed test ([fc0a63b](https://github.com/camunda/camunda-schema-bundler/commit/fc0a63b338e3601cf940058a0b8c0ff98187bdf1))
+* Fixed de-duplication flow, updated README.md and addded root to example/package.json ([fd113db](https://github.com/camunda/camunda-schema-bundler/commit/fd113db64bc05e83a9554eaec9d52c086ca71711))
+* Made endpointMap field optional in BundleResult interface, updated example/README.md ([4f0755d](https://github.com/camunda/camunda-schema-bundler/commit/4f0755d748680ff47db3a3330cdfceda15d877ec))
+* Removed redundant buildEndpointMap() and using path.posix now to be OS agnostic ([aa95829](https://github.com/camunda/camunda-schema-bundler/commit/aa9582992b1e2954d896e785bed6a6622cbd55b6))
+* Updated example/README.md for better upstream output directory cloarification and update outputEndpointMap tests for graceful failure ([1a21bea](https://github.com/camunda/camunda-schema-bundler/commit/1a21bead26823fd8a42d7fca25357028ed64e208))
+
+
+### Features
+
+* Added mode for generating mapping between endpoint and source .yaml file ([c27ff0f](https://github.com/camunda/camunda-schema-bundler/commit/c27ff0f8865fae5476a1923c27d2fd150f5c3f49))
+
+
+### Performance Improvements
+
+* **bundle:** hoist bundledPaths/bundledOps out of per-file loop ([49a0194](https://github.com/camunda/camunda-schema-bundler/commit/49a0194bf55355bc5a18688e704c3ad1e207a3ce))
+
 ## [1.6.1](https://github.com/camunda/camunda-schema-bundler/compare/v1.6.0...v1.6.1) (2026-04-03)
 
 
