@@ -281,45 +281,82 @@ export async function bundle(options: BundleOptions): Promise<BundleResult> {
     unknown
   >;
 
-  // ── Step 2: Augment with missing schemas from all upstream YAML files ─────
-  // Skipped for monolithic specs: a single self-contained file already has all
-  // its schemas inline, and scanning sibling files risks pulling in unrelated
-  // schemas (e.g. rest-api-v1.yaml on pre-8.9 branches).
+  // ── Step 2: Augment schemas & build endpoint map in a single pass ─────────
+  // Scan YAML files once: extract missing component schemas (multi-file only)
+  // and collect path→source mappings for the endpoint map.
+  // For monolithic specs, only the entry file is scanned (schema augmentation
+  // is skipped — the file is already self-contained).
 
   const components = ensureComponents(bundled);
   const schemas = components['schemas'] as Record<string, unknown>;
 
-  if (!isMonolithic) {
-    const allFiles = listFilesRecursive(options.specDir);
-    for (const file of allFiles) {
-      if (!file.endsWith('.yaml') && !file.endsWith('.yml')) continue;
-      try {
-        const content = fs.readFileSync(file, 'utf8');
-        const doc = parseYaml(content) as Record<string, unknown> | null;
+  const HTTP_METHODS = new Set([
+    'get', 'put', 'post', 'delete', 'options', 'head', 'patch', 'trace',
+  ]);
+  const endpointMap: EndpointMapEntry[] = [];
+  const opsSeen = new Set<string>();
+
+  const allFiles = isMonolithic
+    ? [entryPath]
+    : listFilesRecursive(options.specDir);
+
+  for (const file of allFiles) {
+    if (!file.endsWith('.yaml') && !file.endsWith('.yml')) continue;
+    try {
+      const content = fs.readFileSync(file, 'utf8');
+      const doc = parseYaml(content) as Record<string, unknown> | null;
+
+      // Augment missing component schemas (multi-file only)
+      if (!isMonolithic) {
         const docComponents = doc?.['components'] as
           | Record<string, unknown>
           | undefined;
         const docSchemas = docComponents?.['schemas'] as
           | Record<string, unknown>
           | undefined;
-        if (!docSchemas) continue;
-        for (const [name, schema] of Object.entries(docSchemas)) {
-          if (!schemas[name]) {
-            const s = JSON.parse(JSON.stringify(schema));
-            rewriteExternalRefsToLocal(s);
-            schemas[name] = s;
-            stats.augmentedSchemaCount++;
+        if (docSchemas) {
+          for (const [name, schema] of Object.entries(docSchemas)) {
+            if (!schemas[name]) {
+              const s = JSON.parse(JSON.stringify(schema));
+              rewriteExternalRefsToLocal(s);
+              schemas[name] = s;
+              stats.augmentedSchemaCount++;
+            }
           }
         }
-      } catch {
-        // Skip unparseable files
       }
+
+      // Collect endpoint map entries
+      const docPaths = doc?.['paths'] as Record<string, unknown> | undefined;
+      if (docPaths) {
+        const relFile = path.relative(options.specDir, file).split(path.sep).join(path.posix.sep);
+        for (const [apiPath, pathItem] of Object.entries(docPaths)) {
+          if (!pathItem || typeof pathItem !== 'object') continue;
+          const methods = Object.keys(pathItem as Record<string, unknown>).filter(k => HTTP_METHODS.has(k));
+          if (methods.length === 0) continue;
+          for (const key of methods.sort()) {
+            const op = `${key.toUpperCase()} ${apiPath}`;
+            if (opsSeen.has(op)) continue;
+            opsSeen.add(op);
+            endpointMap.push({ operation: op, sourceFile: relFile });
+          }
+        }
+      }
+    } catch {
+      // Skip unparseable files
     }
   }
 
-  // ── Step 2b: Build endpoint map (path → source file) ──────────────────────
-
-  const endpointMap = buildEndpointMap(options.specDir, entryFile, isMonolithic);
+  // Sort endpoint map by path first, then HTTP method
+  endpointMap.sort((a, b) => {
+    const [methodA, ...pathPartsA] = a.operation.split(' ');
+    const [methodB, ...pathPartsB] = b.operation.split(' ');
+    const pathA = pathPartsA.join(' ');
+    const pathB = pathPartsB.join(' ');
+    const byPath = pathA.localeCompare(pathB);
+    if (byPath !== 0) return byPath;
+    return methodA.localeCompare(methodB);
+  });
 
   // ── Step 3: Normalize path-local $refs via signature matching ─────────────
 
@@ -591,70 +628,6 @@ export async function bundle(options: BundleOptions): Promise<BundleResult> {
   }
 
   return { spec: bundled, metadata, endpointMap, stats };
-}
-
-/**
- * Build a map of HTTP method + API path → source YAML file by scanning all
- * YAML files in the spec directory for `paths` definitions and emitting one
- * entry per HTTP operation on each path.
- *
- * For monolithic specs (pre-8.9), all operations come from the entry file.
- */
-function buildEndpointMap(
-  specDir: string,
-  entryFile: string,
-  isMonolithic: boolean
-): EndpointMapEntry[] {
-  const HTTP_METHODS = new Set([
-    'get', 'put', 'post', 'delete', 'options', 'head', 'patch', 'trace',
-  ]);
-  const endpointMap: EndpointMapEntry[] = [];
-  const pathsSeen = new Set<string>();
-
-  const allFiles = isMonolithic ? [path.join(specDir, entryFile)] : listFilesRecursive(specDir);
-
-  for (const file of allFiles) {
-    if (!file.endsWith('.yaml') && !file.endsWith('.yml')) continue;
-    try {
-      const content = fs.readFileSync(file, 'utf8');
-      const doc = parseYaml(content) as Record<string, unknown> | null;
-      const docPaths = doc?.['paths'] as Record<string, unknown> | undefined;
-      if (!docPaths) continue;
-
-      const relFile = path.relative(specDir, file);
-
-      for (const [apiPath, pathItem] of Object.entries(docPaths)) {
-        if (!pathItem || typeof pathItem !== 'object') continue;
-        const methods = Object.keys(pathItem as Record<string, unknown>).filter(k => HTTP_METHODS.has(k));
-        if (methods.length === 0) continue; // skip $ref-only entries (no HTTP methods)
-
-        for (const key of methods.sort()) {
-          const op = `${key.toUpperCase()} ${apiPath}`;
-          if (pathsSeen.has(op)) continue;
-          pathsSeen.add(op);
-          endpointMap.push({
-            operation: op,
-            sourceFile: relFile,
-          });
-        }
-      }
-    } catch {
-      // Skip unparseable files
-    }
-  }
-
-  // Sort by path first, then HTTP method, so consumers can scan endpoints
-  // path-by-path regardless of which methods each path defines.
-  endpointMap.sort((a, b) => {
-    const [methodA, ...pathPartsA] = a.operation.split(' ');
-    const [methodB, ...pathPartsB] = b.operation.split(' ');
-    const pathA = pathPartsA.join(' ');
-    const pathB = pathPartsB.join(' ');
-    const byPath = pathA.localeCompare(pathB);
-    if (byPath !== 0) return byPath;
-    return methodA.localeCompare(methodB);
-  });
-  return endpointMap;
 }
 
 function ensureComponents(
