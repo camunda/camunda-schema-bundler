@@ -13,7 +13,7 @@ The upstream Camunda REST API spec is split across many YAML files. When bundled
 - **URI-encoded refs** (`%24like` instead of `$like`) that confuse generators
 - **Inline duplicates** of schemas that should be component refs
 
-This utility solves all of these problems and produces two outputs:
+This utility solves all of these problems and produces three outputs:
 
 1. **Bundled spec** (`rest-api.bundle.json`) — A single, clean OpenAPI 3 JSON file with all schemas as proper `#/components/schemas/...` refs
 2. **Metadata IR** (`spec-metadata.json`) — A structured intermediate representation of domain-specific information extracted from the spec
@@ -103,7 +103,7 @@ camunda-schema-bundler --version
 | `--entry-file <name>` | Entry YAML file name (default: `rest-api.yaml`) |
 | `--output-spec <path>` | Output path for the bundled JSON spec |
 | `--output-metadata <path>` | Output path for the metadata IR JSON |
-| `--output-endpoint-map <path>` | Output path for the endpoint map JSON (path → source file) |
+| `--output-endpoint-map <path>` | Output path for the endpoint map JSON (method + path → source file) |
 | `--deref-path-local` | Inline remaining path-local `$ref`s (needed for Microsoft.OpenApi) |
 | `--allow-like-refs` | Don't fail on surviving path-local `$like` refs |
 | **General** | |

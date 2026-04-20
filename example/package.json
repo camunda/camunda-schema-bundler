@@ -7,6 +7,9 @@
     "start": "tsx index.ts",
     "start:cli": "camunda-schema-bundler --output-spec output/rest-api.bundle.json --output-metadata output/spec-metadata.json --output-endpoint-map output/endpoint-map.json"
   },
+  "dependencies": {
+    "camunda-schema-bundler": "file:.."
+  },
   "devDependencies": {
     "tsx": "^4.0.0"
   }

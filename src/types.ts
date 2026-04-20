@@ -26,7 +26,7 @@ export interface FetchAndBundleOptions {
   /** Output path for the metadata IR JSON. */
   outputMetadata?: string;
 
-  /** Output path for the endpoint map JSON (path → source file). */
+  /** Output path for the endpoint map JSON (method + path → source file). */
   outputEndpointMap?: string;
 
   /** Manual ref overrides. */
@@ -55,7 +55,7 @@ export interface BundleOptions {
   /** Output path for the metadata IR JSON. */
   outputMetadata?: string;
 
-  /** Output path for the endpoint map JSON (path → source file). */
+  /** Output path for the endpoint map JSON (method + path → source file). */
   outputEndpointMap?: string;
 
   /**

@@ -627,12 +627,13 @@ function buildEndpointMap(
         if (!pathItem || typeof pathItem !== 'object') continue;
         const methods = Object.keys(pathItem as Record<string, unknown>).filter(k => HTTP_METHODS.has(k));
         if (methods.length === 0) continue; // skip $ref-only entries (no HTTP methods)
-        if (pathsSeen.has(apiPath)) continue;
-        pathsSeen.add(apiPath);
 
         for (const key of methods.sort()) {
+          const op = `${key.toUpperCase()} ${apiPath}`;
+          if (pathsSeen.has(op)) continue;
+          pathsSeen.add(op);
           endpointMap.push({
-            operation: `${key.toUpperCase()} ${apiPath}`,
+            operation: op,
             sourceFile: relFile,
           });
         }
