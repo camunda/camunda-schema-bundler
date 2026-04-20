@@ -340,6 +340,25 @@ describe('monolithic spec bundling (pre-8.9 simulation)', () => {
     expect(provider).toBeDefined();
     expect(provider!.providers).toContain('processInstanceKey');
   });
+
+  it('builds endpoint map with one entry per method per path', () => {
+    expect(result.endpointMap).toBeDefined();
+    // /process-instances has get+post, /{key} has get+delete, /jobs/activation has post = 5
+    expect(result.endpointMap.length).toBe(5);
+
+    const ops = result.endpointMap.map((e) => e.operation);
+    expect(ops).toContain('GET /process-instances');
+    expect(ops).toContain('POST /process-instances');
+    expect(ops).toContain('GET /process-instances/{processInstanceKey}');
+    expect(ops).toContain('DELETE /process-instances/{processInstanceKey}');
+    expect(ops).toContain('POST /jobs/activation');
+  });
+
+  it('endpoint map source files point to entry file for monolithic specs', () => {
+    for (const entry of result.endpointMap) {
+      expect(entry.sourceFile).toBe('rest-api.yaml');
+    }
+  });
 });
 
 describe('monolithic spec: sibling unrelated YAML files are not merged in', () => {

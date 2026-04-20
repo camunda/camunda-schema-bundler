@@ -263,6 +263,23 @@ describe('multi-file spec bundling (8.9+ regression guard)', () => {
     expect(opIds).toContain('getProcessInstance');
   });
 
+  it('builds endpoint map with one entry per method', () => {
+    expect(result.endpointMap).toBeDefined();
+    // /process-instances has get+post, /{key} has get = 3 entries
+    expect(result.endpointMap.length).toBe(3);
+
+    const ops = result.endpointMap.map((e) => e.operation);
+    expect(ops).toContain('GET /process-instances');
+    expect(ops).toContain('POST /process-instances');
+    expect(ops).toContain('GET /process-instances/{processInstanceKey}');
+  });
+
+  it('endpoint map source files point to entry file', () => {
+    for (const entry of result.endpointMap) {
+      expect(entry.sourceFile).toBe('rest-api.yaml');
+    }
+  });
+
   it('augments schemas from sibling YAML files in specDir for multi-file specs', () => {
     // In multi-file mode, the augmentation step scans all YAML files in the spec dir
     // and adds any component schemas not already in the bundled output.
@@ -385,6 +402,210 @@ components:
     // UnrelatedSchema should NOT be pulled in (monolithic spec skips augmentation)
     expect(schemas['UnrelatedSchema']).toBeUndefined();
     expect(result.stats.augmentedSchemaCount).toBe(0);
+  });
+});
+
+describe('endpoint map tracks source files across multi-file specs', () => {
+  it('maps endpoints to their correct source YAML files', async () => {
+    const dir = fs.mkdtempSync(
+      path.join(os.tmpdir(), 'bundler-endpoint-map-multifile-')
+    );
+
+    // File defining /orders paths
+    const ordersYaml = `
+openapi: '3.0.3'
+info:
+  title: Orders
+  version: '1.0.0'
+paths:
+  /orders:
+    get:
+      operationId: listOrders
+      responses:
+        '200':
+          description: OK
+    post:
+      operationId: createOrder
+      responses:
+        '200':
+          description: OK
+  /orders/{orderId}:
+    get:
+      operationId: getOrder
+      parameters:
+        - name: orderId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: OK
+`.trimStart();
+
+    // File defining /products paths
+    const productsYaml = `
+openapi: '3.0.3'
+info:
+  title: Products
+  version: '1.0.0'
+paths:
+  /products:
+    get:
+      operationId: listProducts
+      responses:
+        '200':
+          description: OK
+  /products/{productId}:
+    get:
+      operationId: getProduct
+      parameters:
+        - name: productId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: OK
+`.trimStart();
+
+    // Entry file referencing the other YAML files (making it multi-file).
+    // Path-level $refs cause SwaggerParser.bundle() to inline the referenced
+    // path items into the bundled spec, so all six operations end up in
+    // `bundled.paths` (which `endpointMap` mirrors).
+    const entryYaml = `
+openapi: '3.0.3'
+info:
+  title: Test API
+  version: '1.0.0'
+paths:
+  /health:
+    get:
+      operationId: healthCheck
+      responses:
+        '200':
+          description: OK
+  /orders:
+    $ref: './orders.yaml#/paths/~1orders'
+  /orders/{orderId}:
+    $ref: './orders.yaml#/paths/~1orders~1{orderId}'
+  /products:
+    $ref: './products.yaml#/paths/~1products'
+  /products/{productId}:
+    $ref: './products.yaml#/paths/~1products~1{productId}'
+`.trimStart();
+
+    fs.writeFileSync(path.join(dir, 'rest-api.yaml'), entryYaml, 'utf8');
+    fs.writeFileSync(path.join(dir, 'orders.yaml'), ordersYaml, 'utf8');
+    fs.writeFileSync(path.join(dir, 'products.yaml'), productsYaml, 'utf8');
+
+    const result = await bundle({ specDir: dir });
+
+    // /health(get) + /orders(get,post) + /orders/{id}(get) + /products(get) + /products/{id}(get) = 6
+    expect(result.endpointMap.length).toBe(6);
+
+    const ops = result.endpointMap.map((e) => e.operation);
+    expect(ops).toContain('GET /health');
+    expect(ops).toContain('GET /orders');
+    expect(ops).toContain('POST /orders');
+    expect(ops).toContain('GET /orders/{orderId}');
+    expect(ops).toContain('GET /products');
+    expect(ops).toContain('GET /products/{productId}');
+
+    const healthEntry = result.endpointMap.find(
+      (e) => e.operation === 'GET /health'
+    );
+    expect(healthEntry!.sourceFile).toBe('rest-api.yaml');
+
+    const ordersEntries = result.endpointMap.filter(
+      (e) => e.operation.endsWith('/orders')
+    );
+    for (const e of ordersEntries) {
+      expect(e.sourceFile).toBe('orders.yaml');
+    }
+
+    const productsEntry = result.endpointMap.find(
+      (e) => e.operation === 'GET /products'
+    );
+    expect(productsEntry!.sourceFile).toBe('products.yaml');
+  });
+
+  it('writes endpoint map JSON to disk when outputEndpointMap is set', async () => {
+    const dir = fs.mkdtempSync(
+      path.join(os.tmpdir(), 'bundler-endpoint-map-output-')
+    );
+
+    const entryYaml = `
+openapi: '3.0.3'
+info:
+  title: Test
+  version: '1.0.0'
+paths:
+  /items:
+    get:
+      operationId: listItems
+      responses:
+        '200':
+          description: OK
+components:
+  schemas:
+    Item:
+      type: object
+      properties:
+        id:
+          type: string
+`.trimStart();
+
+    fs.writeFileSync(path.join(dir, 'rest-api.yaml'), entryYaml, 'utf8');
+
+    const outPath = path.join(dir, 'endpoint-map.json');
+    const result = await bundle({ specDir: dir, outputEndpointMap: outPath });
+
+    expect(fs.existsSync(outPath)).toBe(true);
+    const written = JSON.parse(fs.readFileSync(outPath, 'utf8'));
+    expect(written).toEqual(result.endpointMap);
+    expect(written.length).toBe(1);
+    expect(written[0].operation).toBe('GET /items');
+    expect(written[0].sourceFile).toBe('rest-api.yaml');
+  });
+
+  it('endpoint map is sorted by path', async () => {
+    const dir = fs.mkdtempSync(
+      path.join(os.tmpdir(), 'bundler-endpoint-map-sorted-')
+    );
+
+    const entryYaml = `
+openapi: '3.0.3'
+info:
+  title: Test
+  version: '1.0.0'
+paths:
+  /zebras:
+    get:
+      operationId: listZebras
+      responses:
+        '200':
+          description: OK
+  /alpacas:
+    get:
+      operationId: listAlpacas
+      responses:
+        '200':
+          description: OK
+  /monkeys:
+    get:
+      operationId: listMonkeys
+      responses:
+        '200':
+          description: OK
+`.trimStart();
+
+    fs.writeFileSync(path.join(dir, 'rest-api.yaml'), entryYaml, 'utf8');
+    const result = await bundle({ specDir: dir });
+
+    const ops = result.endpointMap.map((e) => e.operation);
+    expect(ops).toEqual(['GET /alpacas', 'GET /monkeys', 'GET /zebras']);
   });
 });
 

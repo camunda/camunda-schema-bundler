@@ -1,0 +1,19 @@
+{
+  "name": "camunda-schema-bundler-example",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build:parent": "npm --prefix .. run build",
+    "prestart": "npm run build:parent",
+    "prestart:cli": "npm run build:parent",
+    "start": "tsx index.ts",
+    "start:cli": "node ../dist/cli.js --spec-dir output/upstream --output-spec output/rest-api.bundle.json --output-metadata output/spec-metadata.json --output-endpoint-map output/endpoint-map.json"
+  },
+  "dependencies": {
+    "camunda-schema-bundler": "file:.."
+  },
+  "devDependencies": {
+    "tsx": "^4.0.0"
+  }
+}

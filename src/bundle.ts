@@ -21,7 +21,7 @@ import {
   structuralStringify,
   findPathLocalLikeRefs,
 } from './helpers.js';
-import type { BundleOptions, BundleResult, BundleStats } from './types.js';
+import type { BundleOptions, BundleResult, BundleStats, EndpointMapEntry } from './types.js';
 import { extractMetadata } from './metadata.js';
 
 /**
@@ -281,41 +281,98 @@ export async function bundle(options: BundleOptions): Promise<BundleResult> {
     unknown
   >;
 
-  // ── Step 2: Augment with missing schemas from all upstream YAML files ─────
-  // Skipped for monolithic specs: a single self-contained file already has all
-  // its schemas inline, and scanning sibling files risks pulling in unrelated
-  // schemas (e.g. rest-api-v1.yaml on pre-8.9 branches).
+  // ── Step 2: Augment schemas & build endpoint map in a single pass ─────────
+  // Scan YAML files once: extract missing component schemas (multi-file only)
+  // and collect path→source mappings for the endpoint map.
+  // For monolithic specs, only the entry file is scanned (schema augmentation
+  // is skipped — the file is already self-contained).
 
   const components = ensureComponents(bundled);
   const schemas = components['schemas'] as Record<string, unknown>;
 
-  if (!isMonolithic) {
-    const allFiles = listFilesRecursive(options.specDir);
-    for (const file of allFiles) {
-      if (!file.endsWith('.yaml') && !file.endsWith('.yml')) continue;
-      try {
-        const content = fs.readFileSync(file, 'utf8');
-        const doc = parseYaml(content) as Record<string, unknown> | null;
+  const HTTP_METHODS = new Set([
+    'get', 'put', 'post', 'delete', 'options', 'head', 'patch', 'trace',
+  ]);
+  const endpointMap: EndpointMapEntry[] = [];
+  const opsSeen = new Set<string>();
+  // `bundled.paths` is constant for the whole run; resolve it once and
+  // pre-compute the set of bundled (path, method) pairs so the per-file
+  // inner loop is a cheap O(1) membership check.
+  const bundledPaths =
+    (bundled['paths'] as Record<string, unknown> | undefined) ?? {};
+  const bundledOps = new Set<string>();
+  for (const [apiPath, pathItem] of Object.entries(bundledPaths)) {
+    if (!pathItem || typeof pathItem !== 'object') continue;
+    for (const key of Object.keys(pathItem as Record<string, unknown>)) {
+      if (HTTP_METHODS.has(key)) bundledOps.add(`${key} ${apiPath}`);
+    }
+  }
+
+  const allFiles = isMonolithic
+    ? [entryPath]
+    : listFilesRecursive(options.specDir);
+
+  for (const file of allFiles) {
+    if (!file.endsWith('.yaml') && !file.endsWith('.yml')) continue;
+    try {
+      const content = fs.readFileSync(file, 'utf8');
+      const doc = parseYaml(content) as Record<string, unknown> | null;
+
+      // Augment missing component schemas (multi-file only)
+      if (!isMonolithic) {
         const docComponents = doc?.['components'] as
           | Record<string, unknown>
           | undefined;
         const docSchemas = docComponents?.['schemas'] as
           | Record<string, unknown>
           | undefined;
-        if (!docSchemas) continue;
-        for (const [name, schema] of Object.entries(docSchemas)) {
-          if (!schemas[name]) {
-            const s = JSON.parse(JSON.stringify(schema));
-            rewriteExternalRefsToLocal(s);
-            schemas[name] = s;
-            stats.augmentedSchemaCount++;
+        if (docSchemas) {
+          for (const [name, schema] of Object.entries(docSchemas)) {
+            if (!schemas[name]) {
+              const s = JSON.parse(JSON.stringify(schema));
+              rewriteExternalRefsToLocal(s);
+              schemas[name] = s;
+              stats.augmentedSchemaCount++;
+            }
           }
         }
-      } catch {
-        // Skip unparseable files
       }
+
+      // Collect endpoint map entries.
+      // Only include operations that actually made it into the bundled spec
+      // (tracked in `bundledOps`), so sidecar/unreferenced YAMLs in `specDir`
+      // don't leak endpoints into the map.
+      const docPaths = doc?.['paths'] as Record<string, unknown> | undefined;
+      if (docPaths) {
+        const relFile = path.relative(options.specDir, file).split(path.sep).join(path.posix.sep);
+        for (const [apiPath, pathItem] of Object.entries(docPaths)) {
+          if (!pathItem || typeof pathItem !== 'object') continue;
+          const methods = Object.keys(pathItem as Record<string, unknown>)
+            .filter(k => HTTP_METHODS.has(k) && bundledOps.has(`${k} ${apiPath}`));
+          if (methods.length === 0) continue;
+          for (const key of methods.sort()) {
+            const op = `${key.toUpperCase()} ${apiPath}`;
+            if (opsSeen.has(op)) continue;
+            opsSeen.add(op);
+            endpointMap.push({ operation: op, sourceFile: relFile });
+          }
+        }
+      }
+    } catch {
+      // Skip unparseable files
     }
   }
+
+  // Sort endpoint map by path first, then HTTP method
+  endpointMap.sort((a, b) => {
+    const [methodA, ...pathPartsA] = a.operation.split(' ');
+    const [methodB, ...pathPartsB] = b.operation.split(' ');
+    const pathA = pathPartsA.join(' ');
+    const pathB = pathPartsB.join(' ');
+    const byPath = pathA.localeCompare(pathB);
+    if (byPath !== 0) return byPath;
+    return methodA.localeCompare(methodB);
+  });
 
   // ── Step 3: Normalize path-local $refs via signature matching ─────────────
 
@@ -576,7 +633,17 @@ export async function bundle(options: BundleOptions): Promise<BundleResult> {
     );
   }
 
-  return { spec: bundled, metadata, stats };
+  if (options.outputEndpointMap) {
+    const dir = path.dirname(options.outputEndpointMap);
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(
+      options.outputEndpointMap,
+      JSON.stringify(endpointMap, null, 2) + '\n',
+      'utf8'
+    );
+  }
+
+  return { spec: bundled, metadata, endpointMap, stats };
 }
 
 function ensureComponents(

@@ -13,10 +13,11 @@ The upstream Camunda REST API spec is split across many YAML files. When bundled
 - **URI-encoded refs** (`%24like` instead of `$like`) that confuse generators
 - **Inline duplicates** of schemas that should be component refs
 
-This utility solves all of these problems and produces two outputs:
+This utility solves all of these problems and produces three outputs:
 
 1. **Bundled spec** (`rest-api.bundle.json`) — A single, clean OpenAPI 3 JSON file with all schemas as proper `#/components/schemas/...` refs
 2. **Metadata IR** (`spec-metadata.json`) — A structured intermediate representation of domain-specific information extracted from the spec
+3. **Endpoint map** (`endpoint-map.json`) — A mapping of each API operation (method + path) to its source YAML file, useful for tracing endpoints back to their origin
 
 ## Installation
 
@@ -72,6 +73,11 @@ camunda-schema-bundler \
   --spec-dir external-spec/upstream/zeebe/gateway-protocol/src/main/proto/v2 \
   --output-spec external-spec/bundled/rest-api.bundle.json
 
+# Generate endpoint map (tracks which source file each endpoint came from)
+camunda-schema-bundler \
+  --output-spec external-spec/bundled/rest-api.bundle.json \
+  --output-endpoint-map external-spec/bundled/endpoint-map.json
+
 # Bundle with path-local deref (for C# / Microsoft.OpenApi)
 camunda-schema-bundler --deref-path-local \
   --output-spec external-spec/bundled/rest-api.bundle.json
@@ -97,6 +103,7 @@ camunda-schema-bundler --version
 | `--entry-file <name>` | Entry YAML file name (default: `rest-api.yaml`) |
 | `--output-spec <path>` | Output path for the bundled JSON spec |
 | `--output-metadata <path>` | Output path for the metadata IR JSON |
+| `--output-endpoint-map <path>` | Output path for the endpoint map JSON (method + path → source file) |
 | `--deref-path-local` | Inline remaining path-local `$ref`s (needed for Microsoft.OpenApi) |
 | `--allow-like-refs` | Don't fail on surviving path-local `$like` refs |
 | **General** | |
@@ -122,6 +129,7 @@ const result = await bundle({
   specDir: 'external-spec/upstream/zeebe/gateway-protocol/src/main/proto/v2',
   outputSpec: 'external-spec/bundled/rest-api.bundle.json',
   outputMetadata: 'external-spec/bundled/spec-metadata.json',
+  outputEndpointMap: 'external-spec/bundled/endpoint-map.json',
   dereferencePathLocalRefs: false, // set true for C# / Python
 });
 
@@ -130,6 +138,12 @@ console.log(result.stats);
 //   pathCount: 140, schemaCount: 511, augmentedSchemaCount: 511,
 //   promotedInlineSchemaCount: 46, freshDedupCount: 298,
 //   dereferencedPathLocalRefCount: 0, pathLocalLikeRefCount: 0
+// }
+
+console.log(result.endpointMap[0]);
+// {
+//   operation: "GET /process-instances",
+//   sourceFile: "process-instance.yaml"
 // }
 ```
 
@@ -264,6 +278,16 @@ Every operation with metadata about body shape and union variants:
 | TypeScript (`@hey-api/openapi-ts`) | No | Handles path-local refs natively |
 | C# (Microsoft.OpenApi) | **Yes** | Can't resolve `#/paths/...` refs |
 | Python (`openapi-python-client`) | **Yes** | Benefits from fully resolved refs |
+
+## Example
+
+See the [example/](example/) folder for a minimal standalone app that fetches, bundles, and inspects the spec using both the library API and the CLI.
+
+```bash
+cd example
+npm install
+npm start  # `prestart` builds the parent package first
+```
 
 ## Development
 

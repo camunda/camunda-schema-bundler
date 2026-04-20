@@ -32,6 +32,7 @@ export async function fetchAndBundle(
     entryFile: options.entryFile,
     outputSpec: options.outputSpec,
     outputMetadata: options.outputMetadata,
+    outputEndpointMap: options.outputEndpointMap,
     manualOverrides: options.manualOverrides,
     dereferencePathLocalRefs: options.dereferencePathLocalRefs,
     allowPathLocalLikeRefs: options.allowPathLocalLikeRefs,
