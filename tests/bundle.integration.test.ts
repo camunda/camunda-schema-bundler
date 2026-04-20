@@ -78,9 +78,9 @@ describe.skipIf(!RUN_INTEGRATION)('bundle (integration)', () => {
     const result = await bundle({ specDir: SPEC_DIR });
     expect(result.endpointMap).toBeDefined();
     // Each path can have multiple methods, so endpoint count >= path count
-    expect(result.endpointMap.length).toBeGreaterThanOrEqual(result.stats.pathCount);
+    expect(result.endpointMap!.length).toBeGreaterThanOrEqual(result.stats.pathCount);
 
-    for (const entry of result.endpointMap) {
+    for (const entry of result.endpointMap!) {
       expect(entry.operation).toBeTruthy();
       expect(entry.sourceFile).toBeTruthy();
       expect(entry.sourceFile).toMatch(/\.ya?ml$/);
@@ -88,15 +88,23 @@ describe.skipIf(!RUN_INTEGRATION)('bundle (integration)', () => {
   });
 
   it('writes endpoint map to disk when outputEndpointMap is set', async () => {
-    const outPath = path.join(SPEC_DIR, '..', 'endpoint-map.json');
-    const result = await bundle({
-      specDir: SPEC_DIR,
-      outputEndpointMap: outPath,
-    });
+    const tempDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), 'camunda-schema-bundler-endpoint-map-')
+    );
+    const outPath = path.join(tempDir, 'endpoint-map.json');
 
-    expect(fs.existsSync(outPath)).toBe(true);
-    const written = JSON.parse(fs.readFileSync(outPath, 'utf8'));
-    expect(written.length).toBe(result.endpointMap.length);
-    fs.unlinkSync(outPath);
+    try {
+      const result = await bundle({
+        specDir: SPEC_DIR,
+        outputEndpointMap: outPath,
+      });
+
+      expect(fs.existsSync(outPath)).toBe(true);
+      const written = JSON.parse(fs.readFileSync(outPath, 'utf8'));
+      expect(written.length).toBe(result.endpointMap!.length);
+    } finally {
+      if (fs.existsSync(outPath)) fs.unlinkSync(outPath);
+      fs.rmdirSync(tempDir);
+    }
   });
 });

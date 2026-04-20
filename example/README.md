@@ -27,11 +27,14 @@ All output files are written to `output/`.
 
 ## CLI alternative
 
-You can also run the bundler via CLI instead of the library API:
+You can also run the bundler via CLI instead of the library API.
+This requires that the upstream spec has already been fetched (e.g. by running `npm start` first):
 
 ```sh
 npm run start:cli
 ```
+
+The CLI bundles from `output/upstream/` and writes to the same `output/` directory.
 
 ## Output files
 
