@@ -556,8 +556,8 @@ components:
 
     expect(fs.existsSync(outPath)).toBe(true);
     const written = JSON.parse(fs.readFileSync(outPath, 'utf8'));
-    expect(Object.keys(written).length).toBe(1);
-    expect(written['GET /items']).toBe('rest-api.yaml');
+    expect(written).toEqual(result.endpointMap);
+    expect(written).toEqual({ 'GET /items': 'rest-api.yaml' });
   });
 
   it('endpoint map is sorted by path', async () => {
