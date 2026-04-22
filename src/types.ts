@@ -87,19 +87,12 @@ export interface BundleResult {
 
   /**
    * Map of HTTP operation (method + path) → source YAML file (relative to specDir).
-   * Always populated by `bundle()` (empty array if no operations are found).
+   * Always populated by `bundle()` (empty object if no operations are found).
    */
-  endpointMap: EndpointMapEntry[];
+  endpointMap: Record<string, string>;
 
   /** Stats about the bundling process. */
   stats: BundleStats;
-}
-
-export interface EndpointMapEntry {
-  /** HTTP method and path combined (e.g. "POST /authorizations/{authorizationKey}"). */
-  operation: string;
-  /** Source YAML file relative to specDir. */
-  sourceFile: string;
 }
 
 export interface BundleStats {
