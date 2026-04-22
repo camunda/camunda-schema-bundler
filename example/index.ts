@@ -27,7 +27,7 @@ console.log(`  Eventually consistent:   ${result.metadata.integrity.totalEventua
 
 // ── Endpoint Map ─────────────────────────────────────────────────────────────
 
-const endpointMap = result.endpointMap ?? {};
+const endpointMap = result.endpointMap;
 console.log(`\n=== Endpoint Map (${Object.keys(endpointMap).length} endpoints) ===`);
 
 // Group endpoints by source file
