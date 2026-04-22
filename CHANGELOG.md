@@ -1,3 +1,19 @@
+# [2.0.0](https://github.com/camunda/camunda-schema-bundler/compare/v1.7.0...v2.0.0) (2026-04-22)
+
+
+* fix!: change endpointMap to Record<string, string> ([f55f85a](https://github.com/camunda/camunda-schema-bundler/commit/f55f85a52419bdc68d8a7e81aab125ee0058592b))
+
+
+### Bug Fixes
+
+* updated endpoint map tests ([da37036](https://github.com/camunda/camunda-schema-bundler/commit/da370362a849021a9ed39fe62ea70a1dc6b451f4))
+* Updated endpoint-map struct ([d636e60](https://github.com/camunda/camunda-schema-bundler/commit/d636e60da83c681a1c763491ac395777c536d5cb))
+
+
+### BREAKING CHANGES
+
+* BundleResult.endpointMap is now Record<string, string>
+
 # [1.7.0](https://github.com/camunda/camunda-schema-bundler/compare/v1.6.1...v1.7.0) (2026-04-20)
 
 
