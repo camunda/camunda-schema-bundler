@@ -344,9 +344,9 @@ describe('monolithic spec bundling (pre-8.9 simulation)', () => {
   it('builds endpoint map with one entry per method per path', () => {
     expect(result.endpointMap).toBeDefined();
     // /process-instances has get+post, /{key} has get+delete, /jobs/activation has post = 5
-    expect(result.endpointMap.length).toBe(5);
+    expect(Object.keys(result.endpointMap).length).toBe(5);
 
-    const ops = result.endpointMap.map((e) => e.operation);
+    const ops = Object.keys(result.endpointMap);
     expect(ops).toContain('GET /process-instances');
     expect(ops).toContain('POST /process-instances');
     expect(ops).toContain('GET /process-instances/{processInstanceKey}');
@@ -355,8 +355,8 @@ describe('monolithic spec bundling (pre-8.9 simulation)', () => {
   });
 
   it('endpoint map source files point to entry file for monolithic specs', () => {
-    for (const entry of result.endpointMap) {
-      expect(entry.sourceFile).toBe('rest-api.yaml');
+    for (const sourceFile of Object.values(result.endpointMap)) {
+      expect(sourceFile).toBe('rest-api.yaml');
     }
   });
 });

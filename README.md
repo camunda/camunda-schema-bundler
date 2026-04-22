@@ -140,10 +140,11 @@ console.log(result.stats);
 //   dereferencedPathLocalRefCount: 0, pathLocalLikeRefCount: 0
 // }
 
-console.log(result.endpointMap[0]);
+console.log(result.endpointMap);
 // {
-//   operation: "GET /process-instances",
-//   sourceFile: "process-instance.yaml"
+//   "GET /process-instances": "process-instance.yaml",
+//   "POST /process-instances": "process-instance.yaml",
+//   ...
 // }
 ```
 

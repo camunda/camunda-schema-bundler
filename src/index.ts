@@ -13,7 +13,6 @@ export type {
   BundleResult,
   BundleStats,
   FetchAndBundleOptions,
-  EndpointMapEntry,
   SpecMetadata,
   SemanticKeyEntry,
   UnionEntry,

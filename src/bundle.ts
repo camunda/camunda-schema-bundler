@@ -21,7 +21,7 @@ import {
   structuralStringify,
   findPathLocalLikeRefs,
 } from './helpers.js';
-import type { BundleOptions, BundleResult, BundleStats, EndpointMapEntry } from './types.js';
+import type { BundleOptions, BundleResult, BundleStats } from './types.js';
 import { extractMetadata } from './metadata.js';
 
 /**
@@ -293,7 +293,7 @@ export async function bundle(options: BundleOptions): Promise<BundleResult> {
   const HTTP_METHODS = new Set([
     'get', 'put', 'post', 'delete', 'options', 'head', 'patch', 'trace',
   ]);
-  const endpointMap: EndpointMapEntry[] = [];
+  const endpointMap: Record<string, string> = {};
   const opsSeen = new Set<string>();
   // `bundled.paths` is constant for the whole run; resolve it once and
   // pre-compute the set of bundled (path, method) pairs so the per-file
@@ -354,7 +354,7 @@ export async function bundle(options: BundleOptions): Promise<BundleResult> {
             const op = `${key.toUpperCase()} ${apiPath}`;
             if (opsSeen.has(op)) continue;
             opsSeen.add(op);
-            endpointMap.push({ operation: op, sourceFile: relFile });
+            endpointMap[op] = relFile;
           }
         }
       }
@@ -364,15 +364,16 @@ export async function bundle(options: BundleOptions): Promise<BundleResult> {
   }
 
   // Sort endpoint map by path first, then HTTP method
-  endpointMap.sort((a, b) => {
-    const [methodA, ...pathPartsA] = a.operation.split(' ');
-    const [methodB, ...pathPartsB] = b.operation.split(' ');
+  const sortedEntries = Object.entries(endpointMap).sort((a, b) => {
+    const [methodA, ...pathPartsA] = a[0].split(' ');
+    const [methodB, ...pathPartsB] = b[0].split(' ');
     const pathA = pathPartsA.join(' ');
     const pathB = pathPartsB.join(' ');
     const byPath = pathA.localeCompare(pathB);
     if (byPath !== 0) return byPath;
     return methodA.localeCompare(methodB);
   });
+  const sortedEndpointMap: Record<string, string> = Object.fromEntries(sortedEntries);
 
   // ── Step 3: Normalize path-local $refs via signature matching ─────────────
 
@@ -638,12 +639,12 @@ export async function bundle(options: BundleOptions): Promise<BundleResult> {
     fs.mkdirSync(dir, { recursive: true });
     fs.writeFileSync(
       options.outputEndpointMap,
-      JSON.stringify(endpointMap, null, 2) + '\n',
+      JSON.stringify(sortedEndpointMap, null, 2) + '\n',
       'utf8'
     );
   }
 
-  return { spec: bundled, metadata, endpointMap, stats };
+  return { spec: bundled, metadata, endpointMap: sortedEndpointMap, stats };
 }
 
 function ensureComponents(

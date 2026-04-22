@@ -1,5 +1,4 @@
 import { fetchAndBundle } from 'camunda-schema-bundler';
-import type { EndpointMapEntry } from 'camunda-schema-bundler';
 import fs from 'node:fs';
 
 // Fetch the upstream Camunda REST API spec and bundle it in one call.
@@ -28,26 +27,26 @@ console.log(`  Eventually consistent:   ${result.metadata.integrity.totalEventua
 
 // ── Endpoint Map ─────────────────────────────────────────────────────────────
 
-const endpointMap = result.endpointMap ?? [];
-console.log(`\n=== Endpoint Map (${endpointMap.length} endpoints) ===`);
+const endpointMap = result.endpointMap;
+console.log(`\n=== Endpoint Map (${Object.keys(endpointMap).length} endpoints) ===`);
 
 // Group endpoints by source file
-const byFile = new Map<string, EndpointMapEntry[]>();
-for (const entry of endpointMap) {
-  const list = byFile.get(entry.sourceFile) ?? [];
-  list.push(entry);
-  byFile.set(entry.sourceFile, list);
+const byFile = new Map<string, string[]>();
+for (const [operation, sourceFile] of Object.entries(endpointMap)) {
+  const list = byFile.get(sourceFile) ?? [];
+  list.push(operation);
+  byFile.set(sourceFile, list);
 }
 
 // Print first 5 source files as a preview
 const files = [...byFile.entries()].sort((a, b) => b[1].length - a[1].length);
-for (const [file, entries] of files.slice(0, 5)) {
-  console.log(`\n  ${file} (${entries.length} endpoints):`);
-  for (const e of entries.slice(0, 3)) {
-    console.log(`    ${e.operation}`);
+for (const [file, ops] of files.slice(0, 5)) {
+  console.log(`\n  ${file} (${ops.length} endpoints):`);
+  for (const op of ops.slice(0, 3)) {
+    console.log(`    ${op}`);
   }
-  if (entries.length > 3) {
-    console.log(`    ... and ${entries.length - 3} more`);
+  if (ops.length > 3) {
+    console.log(`    ... and ${ops.length - 3} more`);
   }
 }
 if (files.length > 5) {

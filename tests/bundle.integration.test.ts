@@ -78,12 +78,12 @@ describe.skipIf(!RUN_INTEGRATION)('bundle (integration)', () => {
     const result = await bundle({ specDir: SPEC_DIR });
     expect(result.endpointMap).toBeDefined();
     // Each path can have multiple methods, so endpoint count >= path count
-    expect(result.endpointMap!.length).toBeGreaterThanOrEqual(result.stats.pathCount);
+    expect(Object.keys(result.endpointMap).length).toBeGreaterThanOrEqual(result.stats.pathCount);
 
-    for (const entry of result.endpointMap!) {
-      expect(entry.operation).toBeTruthy();
-      expect(entry.sourceFile).toBeTruthy();
-      expect(entry.sourceFile).toMatch(/\.ya?ml$/);
+    for (const [operation, sourceFile] of Object.entries(result.endpointMap)) {
+      expect(operation).toBeTruthy();
+      expect(sourceFile).toBeTruthy();
+      expect(sourceFile).toMatch(/\.ya?ml$/);
     }
   });
 
@@ -101,7 +101,7 @@ describe.skipIf(!RUN_INTEGRATION)('bundle (integration)', () => {
 
       expect(fs.existsSync(outPath)).toBe(true);
       const written = JSON.parse(fs.readFileSync(outPath, 'utf8'));
-      expect(written.length).toBe(result.endpointMap!.length);
+      expect(Object.keys(written).length).toBe(Object.keys(result.endpointMap).length);
     } finally {
       if (fs.existsSync(outPath)) fs.unlinkSync(outPath);
       fs.rmdirSync(tempDir);

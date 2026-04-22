@@ -266,17 +266,17 @@ describe('multi-file spec bundling (8.9+ regression guard)', () => {
   it('builds endpoint map with one entry per method', () => {
     expect(result.endpointMap).toBeDefined();
     // /process-instances has get+post, /{key} has get = 3 entries
-    expect(result.endpointMap.length).toBe(3);
+    expect(Object.keys(result.endpointMap).length).toBe(3);
 
-    const ops = result.endpointMap.map((e) => e.operation);
+    const ops = Object.keys(result.endpointMap);
     expect(ops).toContain('GET /process-instances');
     expect(ops).toContain('POST /process-instances');
     expect(ops).toContain('GET /process-instances/{processInstanceKey}');
   });
 
   it('endpoint map source files point to entry file', () => {
-    for (const entry of result.endpointMap) {
-      expect(entry.sourceFile).toBe('rest-api.yaml');
+    for (const sourceFile of Object.values(result.endpointMap)) {
+      expect(sourceFile).toBe('rest-api.yaml');
     }
   });
 
@@ -503,9 +503,9 @@ paths:
     const result = await bundle({ specDir: dir });
 
     // /health(get) + /orders(get,post) + /orders/{id}(get) + /products(get) + /products/{id}(get) = 6
-    expect(result.endpointMap.length).toBe(6);
+    expect(Object.keys(result.endpointMap).length).toBe(6);
 
-    const ops = result.endpointMap.map((e) => e.operation);
+    const ops = Object.keys(result.endpointMap);
     expect(ops).toContain('GET /health');
     expect(ops).toContain('GET /orders');
     expect(ops).toContain('POST /orders');
@@ -513,22 +513,14 @@ paths:
     expect(ops).toContain('GET /products');
     expect(ops).toContain('GET /products/{productId}');
 
-    const healthEntry = result.endpointMap.find(
-      (e) => e.operation === 'GET /health'
-    );
-    expect(healthEntry!.sourceFile).toBe('rest-api.yaml');
+    expect(result.endpointMap['GET /health']).toBe('rest-api.yaml');
 
-    const ordersEntries = result.endpointMap.filter(
-      (e) => e.operation.endsWith('/orders')
-    );
-    for (const e of ordersEntries) {
-      expect(e.sourceFile).toBe('orders.yaml');
+    const ordersOps = ops.filter((o) => o.endsWith('/orders'));
+    for (const op of ordersOps) {
+      expect(result.endpointMap[op]).toBe('orders.yaml');
     }
 
-    const productsEntry = result.endpointMap.find(
-      (e) => e.operation === 'GET /products'
-    );
-    expect(productsEntry!.sourceFile).toBe('products.yaml');
+    expect(result.endpointMap['GET /products']).toBe('products.yaml');
   });
 
   it('writes endpoint map JSON to disk when outputEndpointMap is set', async () => {
@@ -565,9 +557,7 @@ components:
     expect(fs.existsSync(outPath)).toBe(true);
     const written = JSON.parse(fs.readFileSync(outPath, 'utf8'));
     expect(written).toEqual(result.endpointMap);
-    expect(written.length).toBe(1);
-    expect(written[0].operation).toBe('GET /items');
-    expect(written[0].sourceFile).toBe('rest-api.yaml');
+    expect(written).toEqual({ 'GET /items': 'rest-api.yaml' });
   });
 
   it('endpoint map is sorted by path', async () => {
@@ -604,7 +594,7 @@ paths:
     fs.writeFileSync(path.join(dir, 'rest-api.yaml'), entryYaml, 'utf8');
     const result = await bundle({ specDir: dir });
 
-    const ops = result.endpointMap.map((e) => e.operation);
+    const ops = Object.keys(result.endpointMap);
     expect(ops).toEqual(['GET /alpacas', 'GET /monkeys', 'GET /zebras']);
   });
 });

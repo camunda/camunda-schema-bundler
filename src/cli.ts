@@ -286,7 +286,7 @@ async function main(): Promise<void> {
   }
   if (args.outputEndpointMap) {
     console.log(
-      `[camunda-schema-bundler] Endpoint map written to ${args.outputEndpointMap} (${result.endpointMap.length} endpoints)`
+      `[camunda-schema-bundler] Endpoint map written to ${args.outputEndpointMap} (${Object.keys(result.endpointMap).length} endpoints)`
     );
   }
 }
