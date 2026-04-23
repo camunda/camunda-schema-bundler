@@ -38,6 +38,13 @@ export interface FetchAndBundleOptions {
   /** If true, allow surviving path-local $like refs. */
   allowPathLocalLikeRefs?: boolean;
 
+  /**
+   * If true, restore operation-site `$ref`s that `SwaggerParser.bundle()`
+   * inlined (e.g. cross-file refs to component schemas). Default: false.
+   * Wired to the CLI's `--no-inline` flag.
+   */
+  restoreUpstreamOperationRefs?: boolean;
+
   /** If true and spec already exists locally, skip fetching. */
   skipFetchIfExists?: boolean;
 }
@@ -76,6 +83,16 @@ export interface BundleOptions {
    * Default: false (fail-fast).
    */
   allowPathLocalLikeRefs?: boolean;
+
+  /**
+   * If true, restore operation-site `$ref`s that `SwaggerParser.bundle()`
+   * inlined back to their upstream component refs. This undoes inlining of
+   * cross-file `$ref`s that the underlying bundler would otherwise lose,
+   * and is more authoritative than signature-based dedup when multiple
+   * components share the same structure. Default: false (preserve legacy
+   * output). Wired to the CLI's `--no-inline` flag.
+   */
+  restoreUpstreamOperationRefs?: boolean;
 }
 
 export interface BundleResult {
@@ -103,6 +120,12 @@ export interface BundleStats {
   freshDedupCount: number;
   dereferencedPathLocalRefCount: number;
   pathLocalLikeRefCount: number;
+  /**
+   * Number of operation-site `$ref`s reinstated from the upstream YAML
+   * after `SwaggerParser.bundle()` inlined them. See the "restore upstream
+   * operation-site $refs" step in `bundle.ts`.
+   */
+  restoredOperationSiteRefCount: number;
 }
 
 // ── Metadata IR ──────────────────────────────────────────────────────────────
