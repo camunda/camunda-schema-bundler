@@ -1,3 +1,10 @@
+# [2.1.0](https://github.com/camunda/camunda-schema-bundler/compare/v2.0.0...v2.1.0) (2026-04-26)
+
+
+### Features
+
+* **fetch:** support fetching upstream spec by raw commit SHA ([446503c](https://github.com/camunda/camunda-schema-bundler/commit/446503c376837d09536f40916ef37b739b11080b))
+
 # [2.0.0](https://github.com/camunda/camunda-schema-bundler/compare/v1.7.0...v2.0.0) (2026-04-22)
 
 
