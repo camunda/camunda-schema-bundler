@@ -95,11 +95,23 @@ export async function fetchSpec(options: FetchOptions): Promise<FetchResult> {
     const run = (args: string[]) =>
       execFileSync(args[0], args.slice(1), { stdio: 'pipe', timeout: 120_000 });
 
-    run(['git', 'clone', '--depth', '1', '--branch', ref, '--filter=blob:none', '--sparse', repoUrl, tmpDir]);
-    run(['git', '-C', tmpDir, 'sparse-checkout', 'init', '--no-cone']);
-    run(['git', '-C', tmpDir, 'sparse-checkout', 'set', `/${specDir}`]);
-    // Force checkout to populate tree with sparse-checkout patterns
-    run(['git', '-C', tmpDir, 'checkout']);
+    if (isCommitSha(ref)) {
+      // Branch/tag refs work with `git clone --branch`; raw commit SHAs do not.
+      // Use init + fetch-by-SHA instead. GitHub permits this because the repo
+      // sets uploadpack.allowReachableSHA1InWant on the server side.
+      run(['git', 'init', tmpDir]);
+      run(['git', '-C', tmpDir, 'remote', 'add', 'origin', repoUrl]);
+      run(['git', '-C', tmpDir, 'fetch', '--depth', '1', '--filter=blob:none', 'origin', ref]);
+      run(['git', '-C', tmpDir, 'sparse-checkout', 'init', '--no-cone']);
+      run(['git', '-C', tmpDir, 'sparse-checkout', 'set', `/${specDir}`]);
+      run(['git', '-C', tmpDir, 'checkout', 'FETCH_HEAD']);
+    } else {
+      run(['git', 'clone', '--depth', '1', '--branch', ref, '--filter=blob:none', '--sparse', repoUrl, tmpDir]);
+      run(['git', '-C', tmpDir, 'sparse-checkout', 'init', '--no-cone']);
+      run(['git', '-C', tmpDir, 'sparse-checkout', 'set', `/${specDir}`]);
+      // Force checkout to populate tree with sparse-checkout patterns
+      run(['git', '-C', tmpDir, 'checkout']);
+    }
 
     const sourceDir = resolve(tmpDir, specDir);
     const sourceEntry = resolve(sourceDir, entryFile);
@@ -127,3 +139,12 @@ export async function fetchSpec(options: FetchOptions): Promise<FetchResult> {
 }
 
 export { DEFAULT_REPO_URL, DEFAULT_REF, DEFAULT_SPEC_DIR, MONOLITHIC_SPEC_DIR, DEFAULT_ENTRY_FILE };
+
+/**
+ * A ref is treated as a commit SHA if it is 7-40 hexadecimal characters.
+ * Branch and tag names that match this shape are vanishingly rare in
+ * practice (`main`, `stable/8.9`, `operate-8.5.5` are all excluded).
+ */
+function isCommitSha(ref: string): boolean {
+  return /^[0-9a-f]{7,40}$/i.test(ref);
+}
