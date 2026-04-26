@@ -44,6 +44,16 @@ describe.skipIf(!RUN_INTEGRATION)('bundle (integration)', () => {
     expect(result.metadata.eventuallyConsistentOps.length).toBeGreaterThan(0);
   });
 
+  it('fetches by raw commit SHA', async () => {
+    // Known historical commit on camunda/camunda main containing the v2 spec.
+    const sha = '2b2b962a312b86586ade7547d513783371db32a2';
+    const shaSpecDir = path.join(os.tmpdir(), `camunda-schema-bundler-test-sha-${sha.slice(0, 8)}`);
+    if (fs.existsSync(shaSpecDir)) fs.rmSync(shaSpecDir, { recursive: true, force: true });
+    const result = await fetchSpec({ outputDir: shaSpecDir, ref: sha });
+    expect(result.fetched).toBe(true);
+    expect(fs.existsSync(result.entryPath)).toBe(true);
+  }, 120_000);
+
   it('dereferences path-local refs when requested', async () => {
     const result = await bundle({
       specDir: SPEC_DIR,
