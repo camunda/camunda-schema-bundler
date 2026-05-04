@@ -41,6 +41,7 @@ interface CliArgs {
   outputEndpointMap?: string;
   derefPathLocal: boolean;
   allowLikeRefs: boolean;
+  noInline: boolean;
   skipFetchIfExists: boolean;
   help: boolean;
   version: boolean;
@@ -52,6 +53,7 @@ function parseArgs(argv: string[]): CliArgs {
     autoRef: false,
     derefPathLocal: false,
     allowLikeRefs: false,
+    noInline: false,
     skipFetchIfExists: false,
     help: false,
     version: false,
@@ -94,6 +96,9 @@ function parseArgs(argv: string[]): CliArgs {
         break;
       case '--allow-like-refs':
         args.allowLikeRefs = true;
+        break;
+      case '--no-inline':
+        args.noInline = true;
         break;
       case '--skip-fetch-if-exists':
         args.skipFetchIfExists = true;
@@ -141,6 +146,9 @@ Bundle options:
   --output-endpoint-map <path>  Output path for endpoint map JSON
   --deref-path-local        Inline remaining path-local $refs
   --allow-like-refs         Don't fail on surviving path-local $like refs
+  --no-inline               Restore upstream operation-site $refs that
+                              SwaggerParser.bundle() inlined (preserves
+                              cross-file $refs to named components)
   --help, -h                Show this help
   --version, -v             Show version
 
@@ -242,6 +250,7 @@ async function main(): Promise<void> {
     outputEndpointMap: args.outputEndpointMap,
     dereferencePathLocalRefs: args.derefPathLocal,
     allowPathLocalLikeRefs: args.allowLikeRefs,
+    restoreUpstreamOperationRefs: args.noInline,
   });
 
   console.log(

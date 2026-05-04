@@ -217,6 +217,73 @@ const DEFAULT_MANUAL_OVERRIDES: Record<string, string> = {
 };
 
 /**
+ * Encode a string for use as a single JSON Pointer segment (RFC 6901).
+ */
+function jsonPointerEncodeSegment(s: string): string {
+  return s.replace(/~/g, '~0').replace(/\//g, '~1');
+}
+
+/**
+ * Resolve a JSON Pointer (RFC 6901) against `root`, returning the literal
+ * node at that location without following any intermediate `$ref`s. Returns
+ * `undefined` if the pointer does not resolve.
+ */
+function resolveJsonPointer(
+  root: Record<string, unknown>,
+  pointer: string
+): unknown {
+  if (pointer === '') return root;
+  if (!pointer.startsWith('/')) return undefined;
+  let cur: unknown = root;
+  for (const seg of pointer.slice(1).split('/')) {
+    if (cur === null || typeof cur !== 'object') return undefined;
+    const decoded = seg.replace(/~1/g, '/').replace(/~0/g, '~');
+    cur = (cur as Record<string, unknown>)[decoded];
+  }
+  return cur;
+}
+
+/**
+ * Walk an upstream operation node and collect every `$ref` that targets a
+ * component schema, keyed by JSON Pointer (relative to the bundled doc root)
+ * of the position where the ref appears. Stops descending at `$ref` nodes
+ * (per OpenAPI semantics, sibling keys of `$ref` are ignored).
+ *
+ * Cross-file refs like `tenants.yaml#/components/schemas/Foo` and local refs
+ * like `#/components/schemas/Foo` are both normalized to the local form
+ * `#/components/schemas/Foo`, since the bundled document uses local refs.
+ */
+function collectOperationRefs(
+  op: unknown,
+  opPointer: string,
+  out: Map<string, string>
+): void {
+  walk(op, opPointer);
+  function walk(node: unknown, ptr: string): void {
+    if (!node || typeof node !== 'object') return;
+    if (Array.isArray(node)) {
+      node.forEach((child, i) => walk(child, `${ptr}/${i}`));
+      return;
+    }
+    const obj = node as Record<string, unknown>;
+    if (typeof obj['$ref'] === 'string') {
+      const ref = obj['$ref'] as string;
+      const hashIdx = ref.indexOf('#');
+      if (hashIdx >= 0) {
+        const fragment = ref.slice(hashIdx);
+        if (fragment.startsWith('#/components/schemas/') && !out.has(ptr)) {
+          out.set(ptr, fragment);
+        }
+      }
+      return;
+    }
+    for (const [k, v] of Object.entries(obj)) {
+      walk(v, `${ptr}/${jsonPointerEncodeSegment(k)}`);
+    }
+  }
+}
+
+/**
  * Detect whether a bundled OpenAPI document is a monolithic (single-file) spec.
  *
  * A spec is considered monolithic if the entry file contains no external file
@@ -265,6 +332,7 @@ export async function bundle(options: BundleOptions): Promise<BundleResult> {
     freshDedupCount: 0,
     dereferencedPathLocalRefCount: 0,
     pathLocalLikeRefCount: 0,
+    restoredOperationSiteRefCount: 0,
   };
 
   // ── Step 1: Bundle multi-file YAML into a single document ─────────────────
@@ -295,6 +363,11 @@ export async function bundle(options: BundleOptions): Promise<BundleResult> {
   ]);
   const endpointMap: Record<string, string> = {};
   const opsSeen = new Set<string>();
+  // Captured (jsonPointer → componentRef) for every operation-site `$ref`
+  // we observe in the upstream YAML. After bundling, we restore these refs
+  // on the bundled document to undo any inlining performed by
+  // `SwaggerParser.bundle()`.
+  const upstreamOpRefs = new Map<string, string>();
   // `bundled.paths` is constant for the whole run; resolve it once and
   // pre-compute the set of bundled (path, method) pairs so the per-file
   // inner loop is a cheap O(1) membership check.
@@ -355,6 +428,11 @@ export async function bundle(options: BundleOptions): Promise<BundleResult> {
             if (opsSeen.has(op)) continue;
             opsSeen.add(op);
             endpointMap[op] = relFile;
+            // Capture every operation-site `$ref` so we can restore it after
+            // bundling (see Step 2c).
+            const opNode = (pathItem as Record<string, unknown>)[key];
+            const opPointer = `/paths/${jsonPointerEncodeSegment(apiPath)}/${key}`;
+            collectOperationRefs(opNode, opPointer, upstreamOpRefs);
           }
         }
       }
@@ -374,6 +452,39 @@ export async function bundle(options: BundleOptions): Promise<BundleResult> {
     return methodA.localeCompare(methodB);
   });
   const sortedEndpointMap: Record<string, string> = Object.fromEntries(sortedEntries);
+
+  // ── Step 2c: Restore upstream operation-site $refs ────────────────────────
+  // `SwaggerParser.bundle()` may inline operation-site schemas that originally
+  // had a `$ref` to a named component (this happens in particular for
+  // cross-file refs). When the inline copy is structurally identical to
+  // multiple component schemas (e.g. `*SortRequest` variants that share the
+  // same `{ field, order }` shape, or `Cancel/DeleteProcessInstanceRequest`
+  // that share `{ operationReference }`), the signature-based dedup gives up
+  // because the match is `AMBIGUOUS`, and the inline copy is left in place.
+  //
+  // Re-attaching the upstream `$ref` here is a stronger signal than signature
+  // matching: the upstream YAML already told us which component to use.
+  //
+  // Opt-in via `restoreUpstreamOperationRefs` (CLI: `--no-inline`) so that
+  // the default output is unchanged from earlier releases.
+  if (options.restoreUpstreamOperationRefs) {
+    for (const [pointer, ref] of upstreamOpRefs) {
+      const node = resolveJsonPointer(bundled, pointer);
+      if (!node || typeof node !== 'object' || Array.isArray(node)) continue;
+      const obj = node as Record<string, unknown>;
+      if (typeof obj['$ref'] === 'string') continue; // already a ref → nothing to do
+      const targetName = ref.slice('#/components/schemas/'.length);
+      if (!schemas[targetName]) continue; // target component missing from bundled doc
+      for (const k of Object.keys(obj)) delete obj[k];
+      obj['$ref'] = ref;
+      stats.restoredOperationSiteRefCount++;
+    }
+    if (stats.restoredOperationSiteRefCount > 0) {
+      console.log(
+        `[camunda-schema-bundler] Restored ${stats.restoredOperationSiteRefCount} operation-site $refs from upstream YAML`
+      );
+    }
+  }
 
   // ── Step 3: Normalize path-local $refs via signature matching ─────────────
 

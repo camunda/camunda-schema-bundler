@@ -179,4 +179,147 @@ describe('ambiguous signature dedup', () => {
       ]?.schema?.$ref;
     expect(ref).toBe('#/components/schemas/ItemRequest');
   });
+
+  it(
+    'restores upstream operation-site $refs even when component schemas share a structural signature',
+    async () => {
+      // Reproduces the real-world bug observed against camunda 8.9 where
+      // SwaggerParser inlines a cross-file $ref to a *SortRequest schema and
+      // the signature dedup gives up because two schemas share the same
+      // `{ field, order }` shape.
+      const multiSpecDir = fs.mkdtempSync(
+        path.join(os.tmpdir(), 'bundler-dedup-multifile-')
+      );
+
+      // Note: must be authored as YAML (not JSON) so the bundler's monolithic
+      // detector recognizes the cross-file $refs.
+      const restApi = `openapi: 3.0.3
+info:
+  title: Test
+  version: 1.0.0
+paths:
+  /tenants/{tenantId}/users/search:
+    $ref: './tenants.yaml#/paths/~1tenants~1{tenantId}~1users~1search'
+  /groups/{groupId}/users/search:
+    $ref: './groups.yaml#/paths/~1groups~1{groupId}~1users~1search'
+`;
+
+      const tenants = `paths:
+  /tenants/{tenantId}/users/search:
+    post:
+      operationId: searchTenantUsers
+      parameters:
+        - name: tenantId
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TenantUserSearchQueryRequest'
+      responses:
+        '200':
+          description: OK
+components:
+  schemas:
+    TenantUserSearchQueryRequest:
+      type: object
+      properties:
+        sort:
+          type: array
+          items:
+            $ref: '#/components/schemas/TenantUserSearchQuerySortRequest'
+    TenantUserSearchQuerySortRequest:
+      type: object
+      properties:
+        field:
+          type: string
+          enum: [username]
+        order:
+          type: string
+          enum: [ASC, DESC]
+      required: [field]
+`;
+
+      // Same shape, different name → would be AMBIGUOUS for signature dedup.
+      const groups = `paths:
+  /groups/{groupId}/users/search:
+    post:
+      operationId: searchGroupUsers
+      parameters:
+        - name: groupId
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/GroupUserSearchQueryRequest'
+      responses:
+        '200':
+          description: OK
+components:
+  schemas:
+    GroupUserSearchQueryRequest:
+      type: object
+      properties:
+        sort:
+          type: array
+          items:
+            $ref: '#/components/schemas/GroupUserSearchQuerySortRequest'
+    GroupUserSearchQuerySortRequest:
+      type: object
+      properties:
+        field:
+          type: string
+          enum: [username]
+        order:
+          type: string
+          enum: [ASC, DESC]
+      required: [field]
+`;
+
+      fs.writeFileSync(path.join(multiSpecDir, 'rest-api.yaml'), restApi, 'utf8');
+      fs.writeFileSync(path.join(multiSpecDir, 'tenants.yaml'), tenants, 'utf8');
+      fs.writeFileSync(path.join(multiSpecDir, 'groups.yaml'), groups, 'utf8');
+
+      const result = await bundle({
+        specDir: multiSpecDir,
+        restoreUpstreamOperationRefs: true,
+      });
+      const bundledSpec = result.spec as {
+        paths: Record<string, Record<string, { requestBody?: { content?: { 'application/json'?: { schema?: { $ref?: string } | Record<string, unknown> } } } }>>;
+        components: { schemas: Record<string, unknown> };
+      };
+
+      // Each operation's requestBody must reference its own *Request schema,
+      // not be inlined as an anonymous object.
+      const tenantSchema =
+        bundledSpec.paths['/tenants/{tenantId}/users/search']?.post?.requestBody?.content?.[
+          'application/json'
+        ]?.schema as { $ref?: string };
+      const groupSchema =
+        bundledSpec.paths['/groups/{groupId}/users/search']?.post?.requestBody?.content?.[
+          'application/json'
+        ]?.schema as { $ref?: string };
+
+      expect(tenantSchema?.$ref).toBe('#/components/schemas/TenantUserSearchQueryRequest');
+      expect(groupSchema?.$ref).toBe('#/components/schemas/GroupUserSearchQueryRequest');
+
+      // And the referenced components must still exist as separate schemas.
+      expect(bundledSpec.components.schemas['TenantUserSearchQuerySortRequest']).toBeDefined();
+      expect(bundledSpec.components.schemas['GroupUserSearchQuerySortRequest']).toBeDefined();
+
+      // Stats should report at least the two restorations.
+      expect(result.stats.restoredOperationSiteRefCount).toBeGreaterThanOrEqual(2);
+
+      // Default (no flag) must NOT restore — preserves legacy output.
+      const defaultResult = await bundle({ specDir: multiSpecDir });
+      expect(defaultResult.stats.restoredOperationSiteRefCount).toBe(0);
+    }
+  );
 });
