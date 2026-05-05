@@ -667,4 +667,41 @@ describe('extractMetadata: $ref resolution edge cases (PR #27 review)', () => {
     expect(op!.successStatus).toBe(200);
     expect(op!.successResponseSchemaRef).toBe('ThingResult');
   });
+
+  it('deep-clones object/array vendorExtension values so metadata is independent of the spec', () => {
+    const xConfig = { retries: 3, allow: ['a', 'b'] };
+    const xList = ['one', 'two'];
+    const spec = {
+      components: { schemas: {} },
+      paths: {
+        '/things': {
+          post: {
+            operationId: 'createThing',
+            'x-config': xConfig,
+            'x-list': xList,
+            'x-scalar': 'plain',
+          },
+        },
+      },
+    };
+
+    const md = extractMetadata(spec, {}, 'sha256:test');
+    const op = md.operations.find((o) => o.operationId === 'createThing')!;
+
+    expect(op.vendorExtensions).toEqual({
+      'x-config': { retries: 3, allow: ['a', 'b'] },
+      'x-list': ['one', 'two'],
+      'x-scalar': 'plain',
+    });
+
+    // Object/array values must not be the same reference as the source spec.
+    expect(op.vendorExtensions!['x-config']).not.toBe(xConfig);
+    expect(op.vendorExtensions!['x-list']).not.toBe(xList);
+
+    // Mutating the metadata copy must not affect the spec.
+    (op.vendorExtensions!['x-config'] as { retries: number }).retries = 99;
+    (op.vendorExtensions!['x-list'] as string[]).push('three');
+    expect(xConfig.retries).toBe(3);
+    expect(xList).toEqual(['one', 'two']);
+  });
 });

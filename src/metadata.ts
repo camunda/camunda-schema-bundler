@@ -485,11 +485,15 @@ function extractOperations(
       }
 
       // Vendor extensions: pass through every x-* key on the operation.
+      // Deep-clone object/array values so the metadata IR stays independent
+      // of the bundled spec (mutating one must not affect the other).
       let vendorExtensions: Record<string, unknown> | undefined;
       for (const k of Object.keys(op)) {
         if (k.startsWith('x-')) {
           if (!vendorExtensions) vendorExtensions = {};
-          vendorExtensions[k] = op[k];
+          const v = op[k];
+          vendorExtensions[k] =
+            v !== null && typeof v === 'object' ? structuredClone(v) : v;
         }
       }
 
