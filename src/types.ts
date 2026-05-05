@@ -259,9 +259,12 @@ export interface OperationSummary {
   requestBodyContentTypes: string[];
 
   /**
-   * Component schema name referenced by the request body's first content
-   * entry (`$ref` short name, no `#/components/schemas/` prefix). `undefined`
-   * for inline schemas or operations without a request body.
+   * Component schema name referenced by the request body (`$ref` short name,
+   * no `#/components/schemas/` prefix). Resolved by scanning every entry under
+   * `requestBody.content` and returning the first one whose `schema` is a
+   * `$ref` — inline schemas are skipped, so a later media type with a `$ref`
+   * can win over an earlier one with an inline schema. `undefined` when no
+   * content entry has a `$ref` schema, or when there is no request body.
    */
   requestBodySchemaRef?: string;
 
