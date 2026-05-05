@@ -599,6 +599,109 @@ paths:
   });
 });
 
+describe('#21: consolidated endpoint metadata in spec-metadata.json', () => {
+  it('plumbs sourceFile from per-file scan into OperationSummary', async () => {
+    const dir = fs.mkdtempSync(
+      path.join(os.tmpdir(), 'bundler-source-file-plumb-')
+    );
+
+    fs.writeFileSync(
+      path.join(dir, 'orders.yaml'),
+      `openapi: '3.0.3'
+info: { title: Orders, version: '1.0.0' }
+paths:
+  /orders:
+    get:
+      operationId: listOrders
+      responses: { '200': { description: OK } }
+`,
+      'utf8'
+    );
+    fs.writeFileSync(
+      path.join(dir, 'rest-api.yaml'),
+      `openapi: '3.0.3'
+info: { title: API, version: '1.0.0' }
+paths:
+  /health:
+    get:
+      operationId: healthCheck
+      responses: { '200': { description: OK } }
+  /orders:
+    $ref: './orders.yaml#/paths/~1orders'
+`,
+      'utf8'
+    );
+
+    const result = await bundle({ specDir: dir });
+
+    const health = result.metadata.operations.find(
+      (o) => o.operationId === 'healthCheck'
+    );
+    expect(health!.sourceFile).toBe('rest-api.yaml');
+
+    const orders = result.metadata.operations.find(
+      (o) => o.operationId === 'listOrders'
+    );
+    expect(orders!.sourceFile).toBe('orders.yaml');
+  });
+
+  it('warns and sets stats.endpointMapDeprecated when outputEndpointMap is used', async () => {
+    const dir = fs.mkdtempSync(
+      path.join(os.tmpdir(), 'bundler-endpoint-map-deprecated-')
+    );
+    fs.writeFileSync(
+      path.join(dir, 'rest-api.yaml'),
+      `openapi: '3.0.3'
+info: { title: T, version: '1.0.0' }
+paths:
+  /x:
+    get:
+      operationId: getX
+      responses: { '200': { description: OK } }
+`,
+      'utf8'
+    );
+
+    const warnings: string[] = [];
+    const origWarn = console.warn;
+    console.warn = (msg: string) => {
+      warnings.push(msg);
+    };
+    try {
+      const result = await bundle({
+        specDir: dir,
+        outputEndpointMap: path.join(dir, 'endpoint-map.json'),
+      });
+      expect(result.stats.endpointMapDeprecated).toBe(true);
+      expect(warnings.some((w) => w.includes('endpoint-map.json is deprecated'))).toBe(
+        true
+      );
+    } finally {
+      console.warn = origWarn;
+    }
+  });
+
+  it('does not set endpointMapDeprecated when outputEndpointMap is not used', async () => {
+    const dir = fs.mkdtempSync(
+      path.join(os.tmpdir(), 'bundler-endpoint-map-not-deprecated-')
+    );
+    fs.writeFileSync(
+      path.join(dir, 'rest-api.yaml'),
+      `openapi: '3.0.3'
+info: { title: T, version: '1.0.0' }
+paths:
+  /x:
+    get:
+      operationId: getX
+      responses: { '200': { description: OK } }
+`,
+      'utf8'
+    );
+    const result = await bundle({ specDir: dir });
+    expect(result.stats.endpointMapDeprecated).toBeUndefined();
+  });
+});
+
 describe('DEFAULT_SPEC_DIR points to v2 directory', () => {
   it('DEFAULT_SPEC_DIR ends with /v2 for 8.9+ multi-file spec', () => {
     expect(DEFAULT_SPEC_DIR).toBe(

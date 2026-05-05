@@ -294,6 +294,10 @@ export async function bundle(options: BundleOptions): Promise<BundleResult> {
     'get', 'put', 'post', 'delete', 'options', 'head', 'patch', 'trace',
   ]);
   const endpointMap: Record<string, string> = {};
+  // Per-operation source file map keyed by `${methodLower} ${path}` (e.g.
+  // "get /process-instances"). Used to populate `OperationSummary.sourceFile`
+  // in the metadata IR. See https://github.com/camunda/camunda-schema-bundler/issues/21
+  const sourceFileByOp = new Map<string, string>();
   const opsSeen = new Set<string>();
   // `bundled.paths` is constant for the whole run; resolve it once and
   // pre-compute the set of bundled (path, method) pairs so the per-file
@@ -355,6 +359,7 @@ export async function bundle(options: BundleOptions): Promise<BundleResult> {
             if (opsSeen.has(op)) continue;
             opsSeen.add(op);
             endpointMap[op] = relFile;
+            sourceFileByOp.set(`${key} ${apiPath}`, relFile);
           }
         }
       }
@@ -610,7 +615,7 @@ export async function bundle(options: BundleOptions): Promise<BundleResult> {
   // ── Step 6: Extract metadata IR ───────────────────────────────────────────
 
   const specHash = hashDirectoryTree(options.specDir);
-  const metadata = extractMetadata(bundled, schemas, specHash);
+  const metadata = extractMetadata(bundled, schemas, specHash, sourceFileByOp);
 
   // ── Step 7: Write outputs ─────────────────────────────────────────────────
 
@@ -635,6 +640,13 @@ export async function bundle(options: BundleOptions): Promise<BundleResult> {
   }
 
   if (options.outputEndpointMap) {
+    stats.endpointMapDeprecated = true;
+    console.warn(
+      '[camunda-schema-bundler] WARNING: endpoint-map.json is deprecated and ' +
+        'will be removed in 3.0.0. The same per-operation source file is now ' +
+        'available as `sourceFile` on each entry in `spec-metadata.json`\'s ' +
+        '`operations[]`. See https://github.com/camunda/camunda-schema-bundler/issues/21'
+    );
     const dir = path.dirname(options.outputEndpointMap);
     fs.mkdirSync(dir, { recursive: true });
     fs.writeFileSync(

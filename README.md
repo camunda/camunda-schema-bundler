@@ -17,7 +17,7 @@ This utility solves all of these problems and produces three outputs:
 
 1. **Bundled spec** (`rest-api.bundle.json`) — A single, clean OpenAPI 3 JSON file with all schemas as proper `#/components/schemas/...` refs
 2. **Metadata IR** (`spec-metadata.json`) — A structured intermediate representation of domain-specific information extracted from the spec
-3. **Endpoint map** (`endpoint-map.json`) — A mapping of each API operation (method + path) to its source YAML file, useful for tracing endpoints back to their origin
+3. **Endpoint map** (`endpoint-map.json`) — _Deprecated, removed in 3.0.0._ Each `OperationSummary` in `spec-metadata.json` now carries `sourceFile` directly, so consumers no longer need to read this file or join on `"METHOD /path"`. Still emitted (with a deprecation warning) when `--output-endpoint-map` is set, for one minor cycle.
 
 ## Installation
 
@@ -103,7 +103,7 @@ camunda-schema-bundler --version
 | `--entry-file <name>` | Entry YAML file name (default: `rest-api.yaml`) |
 | `--output-spec <path>` | Output path for the bundled JSON spec |
 | `--output-metadata <path>` | Output path for the metadata IR JSON |
-| `--output-endpoint-map <path>` | Output path for the endpoint map JSON (method + path → source file) |
+| `--output-endpoint-map <path>` | _Deprecated, removed in 3.0.0._ Output path for the endpoint map JSON (method + path → source file). Use `OperationSummary.sourceFile` in `spec-metadata.json` instead. |
 | `--deref-path-local` | Inline remaining path-local `$ref`s (needed for Microsoft.OpenApi) |
 | `--allow-like-refs` | Don't fail on surviving path-local `$like` refs |
 | **General** | |
@@ -259,18 +259,29 @@ Operations marked with `x-eventually-consistent: true`:
 
 ### Operation Summaries
 
-Every operation with metadata about body shape and union variants:
+Every operation with metadata about body shape, union variants, source file, and response shape:
 
 ```json
 {
   "operationId": "createProcessInstance",
   "path": "/process-instances",
   "method": "post",
+  "sourceFile": "process-instance/process-instance.yaml",
   "eventuallyConsistent": false,
   "hasRequestBody": true,
-  "requestBodyUnion": false
+  "requestBodyUnion": false,
+  "requestBodyContentTypes": ["application/json"],
+  "requestBodySchemaRef": "CreateProcessInstanceRequest",
+  "successStatus": 200,
+  "successResponseSchemaRef": "CreateProcessInstanceResult",
+  "vendorExtensions": { "x-ergonomic-helper": "createProcessInstanceFromBpmnFile" }
 }
 ```
+
+The `sourceFile`, `requestBodyContentTypes`, `requestBodySchemaRef`,
+`successResponseSchemaRef`, `successStatus`, and `vendorExtensions` fields
+were added in `spec-metadata.json` schemaVersion `2.0.0`. Together they
+remove the need to read `endpoint-map.json` and join on `"METHOD /path"`.
 
 ## Per-SDK Configuration
 

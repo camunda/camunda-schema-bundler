@@ -148,6 +148,44 @@ describe('extractMetadata', () => {
           parameters: [
             { in: 'path', name: 'processInstanceKey', required: true },
           ],
+          responses: {
+            '200': {
+              content: {
+                'application/json': {
+                  schema: { $ref: '#/components/schemas/PlainSchema' },
+                },
+              },
+            },
+          },
+        },
+      },
+      '/deployments': {
+        post: {
+          operationId: 'createDeployment',
+          tags: ['Deployment'],
+          'x-ergonomic-helper': 'deployResourcesFromFiles',
+          requestBody: {
+            content: {
+              'multipart/form-data': {
+                schema: { type: 'object' },
+              },
+            },
+          },
+          responses: {
+            '201': { description: 'Created' },
+          },
+        },
+      },
+      '/no-content': {
+        delete: {
+          operationId: 'deleteThing',
+          tags: ['Misc'],
+          parameters: [
+            { in: 'path', name: 'thingId', required: true },
+          ],
+          responses: {
+            '204': { description: 'No content' },
+          },
         },
       },
       '/jobs': {
@@ -184,7 +222,17 @@ describe('extractMetadata', () => {
     },
   };
 
-  const metadata = extractMetadata(spec, schemas, 'sha256:test');
+  const sourceFileByOp = new Map<string, string>([
+    ['get /process-instances', 'process-instance.yaml'],
+    ['post /process-instances', 'process-instance.yaml'],
+    ['get /process-instances/{processInstanceKey}', 'process-instance.yaml'],
+    ['post /jobs', 'job.yaml'],
+    ['post /evaluate', 'evaluation.yaml'],
+    ['post /deployments', 'deployment.yaml'],
+    ['delete /no-content', 'misc.yaml'],
+  ]);
+
+  const metadata = extractMetadata(spec, schemas, 'sha256:test', sourceFileByOp);
 
   it('extracts semantic keys from x-semantic-type schemas', () => {
     expect(metadata.semanticKeys).toHaveLength(1);
@@ -237,7 +285,7 @@ describe('extractMetadata', () => {
   });
 
   it('extracts all operations', () => {
-    expect(metadata.operations).toHaveLength(5);
+    expect(metadata.operations).toHaveLength(7);
     const create = metadata.operations.find(
       (o) => o.operationId === 'createProcessInstance'
     );
@@ -257,7 +305,7 @@ describe('extractMetadata', () => {
   it('reports correct integrity counts', () => {
     expect(metadata.integrity.totalSemanticKeys).toBe(1);
     expect(metadata.integrity.totalUnions).toBe(3);
-    expect(metadata.integrity.totalOperations).toBe(5);
+    expect(metadata.integrity.totalOperations).toBe(7);
     expect(metadata.integrity.totalEventuallyConsistent).toBe(1);
     expect(metadata.integrity.totalDeprecatedEnumSchemas).toBe(2);
     expect(metadata.integrity.totalSemanticProviders).toBe(2);
@@ -387,5 +435,117 @@ describe('extractMetadata', () => {
       (p) => p.schemaName === 'NoProviderSchema'
     );
     expect(noProvider).toBeUndefined();
+  });
+
+  // ── #21: consolidated endpoint metadata ────────────────────────────────────
+
+  it('bumps spec-metadata schemaVersion to 2.0.0', () => {
+    expect(metadata.schemaVersion).toBe('2.0.0');
+  });
+
+  it('populates sourceFile from the per-operation source-file map', () => {
+    const create = metadata.operations.find(
+      (o) => o.operationId === 'createProcessInstance'
+    );
+    expect(create!.sourceFile).toBe('process-instance.yaml');
+    const activate = metadata.operations.find(
+      (o) => o.operationId === 'activateJobs'
+    );
+    expect(activate!.sourceFile).toBe('job.yaml');
+    const deploy = metadata.operations.find(
+      (o) => o.operationId === 'createDeployment'
+    );
+    expect(deploy!.sourceFile).toBe('deployment.yaml');
+  });
+
+  it('defaults sourceFile to empty string when no map is supplied', () => {
+    const md = extractMetadata(spec, schemas, 'sha256:test');
+    for (const op of md.operations) {
+      expect(op.sourceFile).toBe('');
+    }
+  });
+
+  it('captures requestBodyContentTypes per operation', () => {
+    const create = metadata.operations.find(
+      (o) => o.operationId === 'createProcessInstance'
+    );
+    expect(create!.requestBodyContentTypes).toEqual(['application/json']);
+
+    const deploy = metadata.operations.find(
+      (o) => o.operationId === 'createDeployment'
+    );
+    expect(deploy!.requestBodyContentTypes).toEqual(['multipart/form-data']);
+
+    const get = metadata.operations.find(
+      (o) => o.operationId === 'getProcessInstance'
+    );
+    expect(get!.requestBodyContentTypes).toEqual([]);
+  });
+
+  it('extracts requestBodySchemaRef for $ref bodies and leaves it undefined for inline', () => {
+    const create = metadata.operations.find(
+      (o) => o.operationId === 'createProcessInstance'
+    );
+    expect(create!.requestBodySchemaRef).toBe('TenantBody');
+
+    const deploy = metadata.operations.find(
+      (o) => o.operationId === 'createDeployment'
+    );
+    expect(deploy!.requestBodySchemaRef).toBeUndefined();
+
+    const get = metadata.operations.find(
+      (o) => o.operationId === 'getProcessInstance'
+    );
+    expect(get!.requestBodySchemaRef).toBeUndefined();
+  });
+
+  it('extracts successStatus and successResponseSchemaRef from the lowest 2xx', () => {
+    const get = metadata.operations.find(
+      (o) => o.operationId === 'getProcessInstance'
+    );
+    expect(get!.successStatus).toBe(200);
+    expect(get!.successResponseSchemaRef).toBe('PlainSchema');
+
+    const deploy = metadata.operations.find(
+      (o) => o.operationId === 'createDeployment'
+    );
+    expect(deploy!.successStatus).toBe(201);
+    expect(deploy!.successResponseSchemaRef).toBeUndefined();
+
+    const del = metadata.operations.find(
+      (o) => o.operationId === 'deleteThing'
+    );
+    expect(del!.successStatus).toBe(204);
+    expect(del!.successResponseSchemaRef).toBeUndefined();
+
+    // No `responses` defined → both undefined
+    const create = metadata.operations.find(
+      (o) => o.operationId === 'createProcessInstance'
+    );
+    expect(create!.successStatus).toBeUndefined();
+    expect(create!.successResponseSchemaRef).toBeUndefined();
+  });
+
+  it('passes through vendorExtensions (x-* keys) on the operation', () => {
+    const deploy = metadata.operations.find(
+      (o) => o.operationId === 'createDeployment'
+    );
+    expect(deploy!.vendorExtensions).toEqual({
+      'x-ergonomic-helper': 'deployResourcesFromFiles',
+    });
+
+    // Promoted x-eventually-consistent is also visible in vendorExtensions
+    const list = metadata.operations.find(
+      (o) => o.operationId === 'listProcessInstances'
+    );
+    expect(list!.vendorExtensions).toEqual({
+      'x-eventually-consistent': true,
+    });
+
+    // Operations with no x-* keys leave vendorExtensions undefined
+    const get = metadata.operations.find(
+      (o) => o.operationId === 'getProcessInstance'
+    );
+    expect(get!.vendorExtensions).toBeUndefined();
   });
 });
