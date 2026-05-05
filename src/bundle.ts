@@ -21,7 +21,12 @@ import {
   structuralStringify,
   findPathLocalLikeRefs,
 } from './helpers.js';
-import type { BundleOptions, BundleResult, BundleStats } from './types.js';
+import type {
+  BundleOptions,
+  BundleResult,
+  BundleStats,
+  EndpointMapEntry,
+} from './types.js';
 import { extractMetadata } from './metadata.js';
 
 /**
@@ -293,18 +298,30 @@ export async function bundle(options: BundleOptions): Promise<BundleResult> {
   const HTTP_METHODS = new Set([
     'get', 'put', 'post', 'delete', 'options', 'head', 'patch', 'trace',
   ]);
-  const endpointMap: Record<string, string> = {};
+  const endpointMap: Record<string, EndpointMapEntry> = {};
   const opsSeen = new Set<string>();
   // `bundled.paths` is constant for the whole run; resolve it once and
   // pre-compute the set of bundled (path, method) pairs so the per-file
-  // inner loop is a cheap O(1) membership check.
+  // inner loop is a cheap O(1) membership check. Also capture the
+  // `operationId` for each bundled operation so the endpoint map can carry
+  // it without a second pass over the spec.
   const bundledPaths =
     (bundled['paths'] as Record<string, unknown> | undefined) ?? {};
   const bundledOps = new Set<string>();
+  const operationIdByOp = new Map<string, string | null>();
   for (const [apiPath, pathItem] of Object.entries(bundledPaths)) {
     if (!pathItem || typeof pathItem !== 'object') continue;
-    for (const key of Object.keys(pathItem as Record<string, unknown>)) {
-      if (HTTP_METHODS.has(key)) bundledOps.add(`${key} ${apiPath}`);
+    for (const [key, op] of Object.entries(
+      pathItem as Record<string, unknown>
+    )) {
+      if (!HTTP_METHODS.has(key)) continue;
+      const opKey = `${key} ${apiPath}`;
+      bundledOps.add(opKey);
+      const opId =
+        op && typeof op === 'object'
+          ? (op as Record<string, unknown>)['operationId']
+          : undefined;
+      operationIdByOp.set(opKey, typeof opId === 'string' ? opId : null);
     }
   }
 
@@ -354,7 +371,10 @@ export async function bundle(options: BundleOptions): Promise<BundleResult> {
             const op = `${key.toUpperCase()} ${apiPath}`;
             if (opsSeen.has(op)) continue;
             opsSeen.add(op);
-            endpointMap[op] = relFile;
+            endpointMap[op] = {
+              operationId: operationIdByOp.get(`${key} ${apiPath}`) ?? null,
+              file: relFile,
+            };
           }
         }
       }
@@ -373,7 +393,7 @@ export async function bundle(options: BundleOptions): Promise<BundleResult> {
     if (byPath !== 0) return byPath;
     return methodA.localeCompare(methodB);
   });
-  const sortedEndpointMap: Record<string, string> = Object.fromEntries(sortedEntries);
+  const sortedEndpointMap: Record<string, EndpointMapEntry> = Object.fromEntries(sortedEntries);
 
   // ── Step 3: Normalize path-local $refs via signature matching ─────────────
 

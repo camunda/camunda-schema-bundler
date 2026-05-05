@@ -275,8 +275,8 @@ describe('multi-file spec bundling (8.9+ regression guard)', () => {
   });
 
   it('endpoint map source files point to entry file', () => {
-    for (const sourceFile of Object.values(result.endpointMap)) {
-      expect(sourceFile).toBe('rest-api.yaml');
+    for (const entry of Object.values(result.endpointMap)) {
+      expect(entry.file).toBe('rest-api.yaml');
     }
   });
 
@@ -513,14 +513,30 @@ paths:
     expect(ops).toContain('GET /products');
     expect(ops).toContain('GET /products/{productId}');
 
-    expect(result.endpointMap['GET /health']).toBe('rest-api.yaml');
+    expect(result.endpointMap['GET /health']).toEqual({
+      operationId: 'healthCheck',
+      file: 'rest-api.yaml',
+    });
 
     const ordersOps = ops.filter((o) => o.endsWith('/orders'));
     for (const op of ordersOps) {
-      expect(result.endpointMap[op]).toBe('orders.yaml');
+      expect(result.endpointMap[op].file).toBe('orders.yaml');
     }
+    expect(result.endpointMap['GET /orders'].operationId).toBe('listOrders');
+    expect(result.endpointMap['POST /orders'].operationId).toBe('createOrder');
+    expect(result.endpointMap['GET /orders/{orderId}']).toEqual({
+      operationId: 'getOrder',
+      file: 'orders.yaml',
+    });
 
-    expect(result.endpointMap['GET /products']).toBe('products.yaml');
+    expect(result.endpointMap['GET /products']).toEqual({
+      operationId: 'listProducts',
+      file: 'products.yaml',
+    });
+    expect(result.endpointMap['GET /products/{productId}']).toEqual({
+      operationId: 'getProduct',
+      file: 'products.yaml',
+    });
   });
 
   it('writes endpoint map JSON to disk when outputEndpointMap is set', async () => {
@@ -557,7 +573,9 @@ components:
     expect(fs.existsSync(outPath)).toBe(true);
     const written = JSON.parse(fs.readFileSync(outPath, 'utf8'));
     expect(written).toEqual(result.endpointMap);
-    expect(written).toEqual({ 'GET /items': 'rest-api.yaml' });
+    expect(written).toEqual({
+      'GET /items': { operationId: 'listItems', file: 'rest-api.yaml' },
+    });
   });
 
   it('endpoint map is sorted by path', async () => {

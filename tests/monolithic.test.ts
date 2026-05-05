@@ -355,9 +355,26 @@ describe('monolithic spec bundling (pre-8.9 simulation)', () => {
   });
 
   it('endpoint map source files point to entry file for monolithic specs', () => {
-    for (const sourceFile of Object.values(result.endpointMap)) {
-      expect(sourceFile).toBe('rest-api.yaml');
+    for (const entry of Object.values(result.endpointMap)) {
+      expect(entry.file).toBe('rest-api.yaml');
     }
+  });
+
+  it('endpoint map entries carry the operationId from the bundled spec', () => {
+    expect(result.endpointMap['POST /process-instances'].operationId).toBe(
+      'createProcessInstance'
+    );
+    expect(
+      result.endpointMap['GET /process-instances/{processInstanceKey}']
+        .operationId
+    ).toBe('getProcessInstance');
+    expect(
+      result.endpointMap['DELETE /process-instances/{processInstanceKey}']
+        .operationId
+    ).toBe('cancelProcessInstance');
+    expect(result.endpointMap['POST /jobs/activation'].operationId).toBe(
+      'activateJobs'
+    );
   });
 });
 

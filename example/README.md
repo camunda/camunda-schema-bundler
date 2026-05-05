@@ -42,7 +42,7 @@ The CLI bundles from `output/upstream/` and writes to the same `output/` directo
 |---|---|
 | `output/rest-api.bundle.json` | Single, normalized OpenAPI 3 JSON spec |
 | `output/spec-metadata.json` | Metadata IR (semantic keys, unions, operations) |
-| `output/endpoint-map.json` | Map of each API operation (method + path) → source YAML file |
+| `output/endpoint-map.json` | Map of each API operation (method + path) → `{ operationId, file }` |
 | `output/upstream/` | Raw fetched upstream spec files |
 
 ## Expected output

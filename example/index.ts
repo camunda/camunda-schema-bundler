@@ -32,10 +32,10 @@ console.log(`\n=== Endpoint Map (${Object.keys(endpointMap).length} endpoints) =
 
 // Group endpoints by source file
 const byFile = new Map<string, string[]>();
-for (const [operation, sourceFile] of Object.entries(endpointMap)) {
-  const list = byFile.get(sourceFile) ?? [];
-  list.push(operation);
-  byFile.set(sourceFile, list);
+for (const [operation, entry] of Object.entries(endpointMap)) {
+  const list = byFile.get(entry.file) ?? [];
+  list.push(`${operation}${entry.operationId ? ` (${entry.operationId})` : ''}`);
+  byFile.set(entry.file, list);
 }
 
 // Print first 5 source files as a preview

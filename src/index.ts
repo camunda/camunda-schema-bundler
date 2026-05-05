@@ -12,6 +12,7 @@ export type {
   BundleOptions,
   BundleResult,
   BundleStats,
+  EndpointMapEntry,
   FetchAndBundleOptions,
   SpecMetadata,
   SemanticKeyEntry,

@@ -90,10 +90,12 @@ describe.skipIf(!RUN_INTEGRATION)('bundle (integration)', () => {
     // Each path can have multiple methods, so endpoint count >= path count
     expect(Object.keys(result.endpointMap).length).toBeGreaterThanOrEqual(result.stats.pathCount);
 
-    for (const [operation, sourceFile] of Object.entries(result.endpointMap)) {
+    for (const [operation, entry] of Object.entries(result.endpointMap)) {
       expect(operation).toBeTruthy();
-      expect(sourceFile).toBeTruthy();
-      expect(sourceFile).toMatch(/\.ya?ml$/);
+      expect(entry).toBeTruthy();
+      expect(entry.file).toMatch(/\.ya?ml$/);
+      // operationId may be null for operations that don't declare one
+      expect(entry.operationId === null || typeof entry.operationId === 'string').toBe(true);
     }
   });
 

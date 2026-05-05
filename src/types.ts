@@ -78,6 +78,17 @@ export interface BundleOptions {
   allowPathLocalLikeRefs?: boolean;
 }
 
+export interface EndpointMapEntry {
+  /**
+   * The operation's `operationId` from the bundled spec, or `null` if the
+   * upstream operation does not declare one.
+   */
+  operationId: string | null;
+
+  /** Source YAML file (relative to `specDir`) the operation came from. */
+  file: string;
+}
+
 export interface BundleResult {
   /** The bundled OpenAPI spec as a plain object. */
   spec: Record<string, unknown>;
@@ -86,10 +97,11 @@ export interface BundleResult {
   metadata: SpecMetadata;
 
   /**
-   * Map of HTTP operation (method + path) → source YAML file (relative to specDir).
+   * Map of HTTP operation (method + path) → entry describing the operation
+   * (`operationId` and source YAML file, relative to `specDir`).
    * Always populated by `bundle()` (empty object if no operations are found).
    */
-  endpointMap: Record<string, string>;
+  endpointMap: Record<string, EndpointMapEntry>;
 
   /** Stats about the bundling process. */
   stats: BundleStats;
