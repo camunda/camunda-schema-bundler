@@ -1,3 +1,16 @@
+# [2.2.0](https://github.com/camunda/camunda-schema-bundler/compare/v2.1.0...v2.2.0) (2026-05-05)
+
+
+### Bug Fixes
+
+* **metadata:** deep-clone vendorExtension object/array values ([82d2adf](https://github.com/camunda/camunda-schema-bundler/commit/82d2adf70250bdb8836316990ef9bd65c59fbd86)), closes [#27](https://github.com/camunda/camunda-schema-bundler/issues/27)
+* **metadata:** resolve $ref for requestBody/responses; pick first $ref content entry ([e25989b](https://github.com/camunda/camunda-schema-bundler/commit/e25989bc9c57b4635daaf11c17a419f2327ed8f1))
+
+
+### Features
+
+* **metadata:** consolidate endpoint metadata into spec-metadata.json ([6312eaa](https://github.com/camunda/camunda-schema-bundler/commit/6312eaaba94886877281dd53192af9cc6400b66d)), closes [#21](https://github.com/camunda/camunda-schema-bundler/issues/21) [camunda/api-test-generator#131](https://github.com/camunda/api-test-generator/issues/131)
+
 # [2.1.0](https://github.com/camunda/camunda-schema-bundler/compare/v2.0.0...v2.1.0) (2026-04-26)
 
 
