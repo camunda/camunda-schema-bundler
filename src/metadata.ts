@@ -339,6 +339,16 @@ function extractOperations(
       | Record<string, unknown>
       | undefined
   ) ?? {};
+  const componentRequestBodies = (
+    (spec['components'] as Record<string, unknown> | undefined)?.[
+      'requestBodies'
+    ] as Record<string, unknown> | undefined
+  ) ?? {};
+  const componentResponses = (
+    (spec['components'] as Record<string, unknown> | undefined)?.[
+      'responses'
+    ] as Record<string, unknown> | undefined
+  ) ?? {};
 
   for (const [pathStr, pathItem] of Object.entries(paths)) {
     if (!pathItem || typeof pathItem !== 'object') continue;
@@ -376,13 +386,20 @@ function extractOperations(
       let requestBodySchemaRef: string | undefined;
 
       if (hasRequestBody) {
-        const rb = op['requestBody'] as Record<string, unknown>;
-        const content = rb['content'] as Record<string, unknown> | undefined;
+        // Resolve `requestBody` itself if it points at
+        // `#/components/requestBodies/...` so that the rest of this block
+        // sees the actual content map.
+        const rb = resolveComponentRef(
+          op['requestBody'] as Record<string, unknown>,
+          componentRequestBodies
+        );
+        const content = rb?.['content'] as Record<string, unknown> | undefined;
         if (content) {
           for (const ct of Object.keys(content)) {
             requestBodyContentTypes.push(ct);
           }
-          // First content entry's $ref short name (if any)
+          // First content entry whose schema is a $ref wins. Inline schemas
+          // do not block later $ref entries.
           for (const mediaObj of Object.values(content)) {
             const media = mediaObj as Record<string, unknown> | undefined;
             const rawSchema = media?.['schema'] as Record<string, unknown> | undefined;
@@ -391,7 +408,6 @@ function extractOperations(
               requestBodySchemaRef = ref.split('/').pop();
               break;
             }
-            if (rawSchema) break;
           }
           // Check all JSON-like content types
           for (const [contentType, mediaObj] of Object.entries(content)) {
@@ -443,9 +459,13 @@ function extractOperations(
           .sort((a, b) => a.num - b.num);
         if (statuses.length > 0) {
           successStatus = statuses[0].num;
-          const resp = responses[statuses[0].key] as
-            | Record<string, unknown>
-            | undefined;
+          // Resolve `responses[<status>]` if it points at
+          // `#/components/responses/...` so a factored-out response still
+          // exposes its content schema $ref.
+          const resp = resolveComponentRef(
+            responses[statuses[0].key] as Record<string, unknown> | undefined,
+            componentResponses
+          );
           const respContent = resp?.['content'] as
             | Record<string, unknown>
             | undefined;
@@ -522,6 +542,23 @@ function resolveSchemaRef(
     return componentSchemas[name] as Record<string, unknown> | undefined;
   }
   return schema;
+}
+
+/**
+ * Resolve a `$ref` that targets a `#/components/<bucket>/<name>` entry
+ * (e.g. `requestBodies`, `responses`). Returns the original object when it
+ * is not a `$ref`, or `undefined` when the ref cannot be resolved against
+ * the supplied component bucket.
+ */
+function resolveComponentRef(
+  obj: Record<string, unknown> | undefined,
+  componentBucket: Record<string, unknown>
+): Record<string, unknown> | undefined {
+  if (!obj) return undefined;
+  const ref = obj['$ref'];
+  if (typeof ref !== 'string') return obj;
+  const name = ref.split('/').pop()!;
+  return componentBucket[name] as Record<string, unknown> | undefined;
 }
 
 /** Check if a resolved schema has an optional tenantId property. */

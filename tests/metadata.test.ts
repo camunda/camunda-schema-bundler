@@ -549,3 +549,122 @@ describe('extractMetadata', () => {
     expect(get!.vendorExtensions).toBeUndefined();
   });
 });
+
+describe('extractMetadata: $ref resolution edge cases (PR #27 review)', () => {
+  it('finds requestBodySchemaRef in a later content entry when the first is inline', () => {
+    const md = extractMetadata(
+      {
+        components: {
+          schemas: {
+            ThingBody: { type: 'object', properties: { id: { type: 'string' } } },
+          },
+        },
+        paths: {
+          '/things': {
+            post: {
+              operationId: 'createThing',
+              requestBody: {
+                content: {
+                  'multipart/form-data': { schema: { type: 'object' } },
+                  'application/json': {
+                    schema: { $ref: '#/components/schemas/ThingBody' },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+      { ThingBody: {} },
+      'sha256:test'
+    );
+
+    const op = md.operations.find((o) => o.operationId === 'createThing');
+    expect(op!.requestBodyContentTypes).toEqual([
+      'multipart/form-data',
+      'application/json',
+    ]);
+    expect(op!.requestBodySchemaRef).toBe('ThingBody');
+  });
+
+  it('resolves requestBody $ref to a #/components/requestBodies/... entry', () => {
+    const md = extractMetadata(
+      {
+        components: {
+          schemas: {
+            ThingBody: { type: 'object', properties: { id: { type: 'string' } } },
+          },
+          requestBodies: {
+            ThingBodyRef: {
+              required: true,
+              content: {
+                'application/json': {
+                  schema: { $ref: '#/components/schemas/ThingBody' },
+                },
+              },
+            },
+          },
+        },
+        paths: {
+          '/things': {
+            post: {
+              operationId: 'createThing',
+              requestBody: { $ref: '#/components/requestBodies/ThingBodyRef' },
+            },
+          },
+        },
+      },
+      { ThingBody: {} },
+      'sha256:test'
+    );
+
+    const op = md.operations.find((o) => o.operationId === 'createThing');
+    expect(op!.hasRequestBody).toBe(true);
+    expect(op!.requestBodyContentTypes).toEqual(['application/json']);
+    expect(op!.requestBodySchemaRef).toBe('ThingBody');
+  });
+
+  it('resolves a 2xx response $ref to a #/components/responses/... entry', () => {
+    const md = extractMetadata(
+      {
+        components: {
+          schemas: {
+            ThingResult: {
+              type: 'object',
+              properties: { id: { type: 'string' } },
+            },
+          },
+          responses: {
+            ThingResultResponse: {
+              description: 'OK',
+              content: {
+                'application/json': {
+                  schema: { $ref: '#/components/schemas/ThingResult' },
+                },
+              },
+            },
+          },
+        },
+        paths: {
+          '/things/{id}': {
+            get: {
+              operationId: 'getThing',
+              parameters: [
+                { in: 'path', name: 'id', required: true },
+              ],
+              responses: {
+                '200': { $ref: '#/components/responses/ThingResultResponse' },
+              },
+            },
+          },
+        },
+      },
+      { ThingResult: {} },
+      'sha256:test'
+    );
+
+    const op = md.operations.find((o) => o.operationId === 'getThing');
+    expect(op!.successStatus).toBe(200);
+    expect(op!.successResponseSchemaRef).toBe('ThingResult');
+  });
+});
