@@ -359,6 +359,13 @@ describe('monolithic spec bundling (pre-8.9 simulation)', () => {
       expect(sourceFile).toBe('rest-api.yaml');
     }
   });
+
+  it('populates OperationSummary.sourceFile from the monolithic entry file', () => {
+    expect(result.metadata.operations.length).toBeGreaterThan(0);
+    for (const op of result.metadata.operations) {
+      expect(op.sourceFile).toBe('rest-api.yaml');
+    }
+  });
 });
 
 describe('monolithic spec: sibling unrelated YAML files are not merged in', () => {

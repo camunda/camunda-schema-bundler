@@ -26,7 +26,13 @@ export interface FetchAndBundleOptions {
   /** Output path for the metadata IR JSON. */
   outputMetadata?: string;
 
-  /** Output path for the endpoint map JSON (method + path → source file). */
+  /**
+   * Output path for the endpoint map JSON (method + path → source file).
+   *
+   * @deprecated Use `OperationSummary.sourceFile` in `spec-metadata.json`.
+   *   `endpoint-map.json` will be removed in 3.0.0. See
+   *   https://github.com/camunda/camunda-schema-bundler/issues/21
+   */
   outputEndpointMap?: string;
 
   /** Manual ref overrides. */
@@ -55,7 +61,13 @@ export interface BundleOptions {
   /** Output path for the metadata IR JSON. */
   outputMetadata?: string;
 
-  /** Output path for the endpoint map JSON (method + path → source file). */
+  /**
+   * Output path for the endpoint map JSON (method + path → source file).
+   *
+   * @deprecated Use `OperationSummary.sourceFile` in `spec-metadata.json`.
+   *   `endpoint-map.json` will be removed in 3.0.0. See
+   *   https://github.com/camunda/camunda-schema-bundler/issues/21
+   */
   outputEndpointMap?: string;
 
   /**
@@ -103,6 +115,14 @@ export interface BundleStats {
   freshDedupCount: number;
   dereferencedPathLocalRefCount: number;
   pathLocalLikeRefCount: number;
+
+  /**
+   * `true` when the caller requested `outputEndpointMap` (or `--output-endpoint-map`).
+   * `endpoint-map.json` is deprecated and slated for removal in 3.0.0; the same
+   * information is now carried per-operation on `OperationSummary` (`sourceFile`)
+   * in `spec-metadata.json`. See https://github.com/camunda/camunda-schema-bundler/issues/21
+   */
+  endpointMapDeprecated?: boolean;
 }
 
 // ── Metadata IR ──────────────────────────────────────────────────────────────
@@ -222,6 +242,48 @@ export interface OperationSummary {
 
   /** Whether the (resolved) request body has an optional tenantId property. */
   optionalTenantIdInBody: boolean;
+
+  /**
+   * Source YAML file the operation came from, relative to the spec dir.
+   * Replaces the join previously required against `endpoint-map.json`.
+   * Empty string when the source file is unknown (e.g. when `extractMetadata`
+   * is called directly without a source-file map).
+   */
+  sourceFile: string;
+
+  /**
+   * Content-type keys declared on `requestBody.content` (e.g.
+   * `['application/json']`, `['multipart/form-data']`). Empty when there is
+   * no request body.
+   */
+  requestBodyContentTypes: string[];
+
+  /**
+   * Component schema name referenced by the request body (`$ref` short name,
+   * no `#/components/schemas/` prefix). Resolved by scanning every entry under
+   * `requestBody.content` and returning the first one whose `schema` is a
+   * `$ref` — inline schemas are skipped, so a later media type with a `$ref`
+   * can win over an earlier one with an inline schema. `undefined` when no
+   * content entry has a `$ref` schema, or when there is no request body.
+   */
+  requestBodySchemaRef?: string;
+
+  /**
+   * Component schema name referenced by the chosen 2xx response's
+   * `application/json` content. `undefined` when the success response is
+   * empty, inline, or non-JSON.
+   */
+  successResponseSchemaRef?: string;
+
+  /** The chosen 2xx status code (200/201/204/…), if any. */
+  successStatus?: number;
+
+  /**
+   * Pass-through of all `x-*` keys declared on the operation. Promoted
+   * extensions (`x-eventually-consistent`) keep their first-class fields and
+   * are also included here for completeness.
+   */
+  vendorExtensions?: Record<string, unknown>;
 }
 
 export interface OperationQueryParam {

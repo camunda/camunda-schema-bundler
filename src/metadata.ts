@@ -31,17 +31,21 @@ const HTTP_METHODS = ['get', 'post', 'put', 'patch', 'delete', 'head', 'options'
 export function extractMetadata(
   spec: Record<string, unknown>,
   schemas: Record<string, unknown>,
-  specHash: string
+  specHash: string,
+  sourceFileByOp?: Map<string, string>
 ): SpecMetadata {
   const semanticKeys = extractSemanticKeys(schemas);
   const unions = extractUnions(schemas);
   const arrays = extractArraySchemas(schemas);
-  const { eventuallyConsistentOps, operations } = extractOperations(spec);
+  const { eventuallyConsistentOps, operations } = extractOperations(
+    spec,
+    sourceFileByOp
+  );
   const deprecatedEnumMembers = extractDeprecatedEnumMembers(schemas);
   const semanticProviders = extractSemanticProviders(schemas);
 
   return {
-    schemaVersion: '1.0.0',
+    schemaVersion: '2.0.0',
     specHash,
     semanticKeys: semanticKeys.sort((a, b) => a.name.localeCompare(b.name)),
     unions: unions.sort((a, b) => a.name.localeCompare(b.name)),
@@ -317,7 +321,10 @@ function extractSemanticProviders(
   return results;
 }
 
-function extractOperations(spec: Record<string, unknown>): {
+function extractOperations(
+  spec: Record<string, unknown>,
+  sourceFileByOp?: Map<string, string>
+): {
   eventuallyConsistentOps: EventuallyConsistentOp[];
   operations: OperationSummary[];
 } {
@@ -331,6 +338,16 @@ function extractOperations(spec: Record<string, unknown>): {
     (spec['components'] as Record<string, unknown> | undefined)?.['schemas'] as
       | Record<string, unknown>
       | undefined
+  ) ?? {};
+  const componentRequestBodies = (
+    (spec['components'] as Record<string, unknown> | undefined)?.[
+      'requestBodies'
+    ] as Record<string, unknown> | undefined
+  ) ?? {};
+  const componentResponses = (
+    (spec['components'] as Record<string, unknown> | undefined)?.[
+      'responses'
+    ] as Record<string, unknown> | undefined
   ) ?? {};
 
   for (const [pathStr, pathItem] of Object.entries(paths)) {
@@ -365,11 +382,33 @@ function extractOperations(spec: Record<string, unknown>): {
       let requestBodyUnion = false;
       const requestBodyUnionRefs: string[] = [];
       let optionalTenantIdInBody = false;
+      const requestBodyContentTypes: string[] = [];
+      let requestBodySchemaRef: string | undefined;
 
       if (hasRequestBody) {
-        const rb = op['requestBody'] as Record<string, unknown>;
-        const content = rb['content'] as Record<string, unknown> | undefined;
+        // Resolve `requestBody` itself if it points at
+        // `#/components/requestBodies/...` so that the rest of this block
+        // sees the actual content map.
+        const rb = resolveComponentRef(
+          op['requestBody'] as Record<string, unknown>,
+          componentRequestBodies
+        );
+        const content = rb?.['content'] as Record<string, unknown> | undefined;
         if (content) {
+          for (const ct of Object.keys(content)) {
+            requestBodyContentTypes.push(ct);
+          }
+          // First content entry whose schema is a $ref wins. Inline schemas
+          // do not block later $ref entries.
+          for (const mediaObj of Object.values(content)) {
+            const media = mediaObj as Record<string, unknown> | undefined;
+            const rawSchema = media?.['schema'] as Record<string, unknown> | undefined;
+            const ref = rawSchema?.['$ref'];
+            if (typeof ref === 'string') {
+              requestBodySchemaRef = ref.split('/').pop();
+              break;
+            }
+          }
           // Check all JSON-like content types
           for (const [contentType, mediaObj] of Object.entries(content)) {
             if (!/json|octet|multipart|text\//i.test(contentType)) continue;
@@ -408,6 +447,58 @@ function extractOperations(spec: Record<string, unknown>): {
 
       const bodyOnly = hasRequestBody && pathParams.length === 0 && queryParams.length === 0;
 
+      // Success response: pick the lowest 2xx status, then look for an
+      // application/json schema $ref under it.
+      let successStatus: number | undefined;
+      let successResponseSchemaRef: string | undefined;
+      const responses = op['responses'] as Record<string, unknown> | undefined;
+      if (responses) {
+        const statuses = Object.keys(responses)
+          .map((k) => ({ key: k, num: Number(k) }))
+          .filter(({ num }) => Number.isInteger(num) && num >= 200 && num < 300)
+          .sort((a, b) => a.num - b.num);
+        if (statuses.length > 0) {
+          successStatus = statuses[0].num;
+          // Resolve `responses[<status>]` if it points at
+          // `#/components/responses/...` so a factored-out response still
+          // exposes its content schema $ref.
+          const resp = resolveComponentRef(
+            responses[statuses[0].key] as Record<string, unknown> | undefined,
+            componentResponses
+          );
+          const respContent = resp?.['content'] as
+            | Record<string, unknown>
+            | undefined;
+          if (respContent) {
+            const json = respContent['application/json'] as
+              | Record<string, unknown>
+              | undefined;
+            const schema = json?.['schema'] as
+              | Record<string, unknown>
+              | undefined;
+            const ref = schema?.['$ref'];
+            if (typeof ref === 'string') {
+              successResponseSchemaRef = ref.split('/').pop();
+            }
+          }
+        }
+      }
+
+      // Vendor extensions: pass through every x-* key on the operation.
+      // Deep-clone object/array values so the metadata IR stays independent
+      // of the bundled spec (mutating one must not affect the other).
+      let vendorExtensions: Record<string, unknown> | undefined;
+      for (const k of Object.keys(op)) {
+        if (k.startsWith('x-')) {
+          if (!vendorExtensions) vendorExtensions = {};
+          const v = op[k];
+          vendorExtensions[k] =
+            v !== null && typeof v === 'object' ? structuredClone(v) : v;
+        }
+      }
+
+      const sourceFile = sourceFileByOp?.get(`${method} ${pathStr}`) ?? '';
+
       operations.push({
         operationId,
         path: pathStr,
@@ -423,6 +514,12 @@ function extractOperations(spec: Record<string, unknown>): {
         queryParams,
         requestBodyUnionRefs,
         optionalTenantIdInBody,
+        sourceFile,
+        requestBodyContentTypes,
+        requestBodySchemaRef,
+        successResponseSchemaRef,
+        successStatus,
+        vendorExtensions,
       });
 
       if (eventuallyConsistent) {
@@ -449,6 +546,23 @@ function resolveSchemaRef(
     return componentSchemas[name] as Record<string, unknown> | undefined;
   }
   return schema;
+}
+
+/**
+ * Resolve a `$ref` that targets a `#/components/<bucket>/<name>` entry
+ * (e.g. `requestBodies`, `responses`). Returns the original object when it
+ * is not a `$ref`, or `undefined` when the ref cannot be resolved against
+ * the supplied component bucket.
+ */
+function resolveComponentRef(
+  obj: Record<string, unknown> | undefined,
+  componentBucket: Record<string, unknown>
+): Record<string, unknown> | undefined {
+  if (!obj) return undefined;
+  const ref = obj['$ref'];
+  if (typeof ref !== 'string') return obj;
+  const name = ref.split('/').pop()!;
+  return componentBucket[name] as Record<string, unknown> | undefined;
 }
 
 /** Check if a resolved schema has an optional tenantId property. */
