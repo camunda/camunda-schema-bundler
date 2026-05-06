@@ -33,6 +33,7 @@ export async function fetchAndBundle(
     outputSpec: options.outputSpec,
     outputMetadata: options.outputMetadata,
     outputEndpointMap: options.outputEndpointMap,
+    outputSemanticKinds: options.outputSemanticKinds,
     manualOverrides: options.manualOverrides,
     dereferencePathLocalRefs: options.dereferencePathLocalRefs,
     allowPathLocalLikeRefs: options.allowPathLocalLikeRefs,

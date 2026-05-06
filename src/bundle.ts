@@ -617,6 +617,24 @@ export async function bundle(options: BundleOptions): Promise<BundleResult> {
   const specHash = hashDirectoryTree(options.specDir);
   const metadata = extractMetadata(bundled, schemas, specHash, sourceFileByOp);
 
+  // ── Step 6b: Read sibling semantic-kinds.json (camunda/camunda-schema-bundler#28) ──
+  //
+  // The upstream spec ships a sibling registry that declares the valid `kind`
+  // values for `x-semantic-establishes` / `x-semantic-requires`. Read it
+  // verbatim if present; older refs predating camunda/camunda#52322 don't ship
+  // one, in which case `semanticKinds` is null and no output file is written.
+  //
+  // Read as a raw Buffer so the on-disk output is byte-identical to the source
+  // (avoids any UTF-8 round-trip surprises like BOM handling). Decode only for
+  // JSON.parse to populate the result.
+  const semanticKindsPath = path.join(options.specDir, 'semantic-kinds.json');
+  let semanticKindsBuffer: Buffer | null = null;
+  let semanticKinds: unknown = null;
+  if (fs.existsSync(semanticKindsPath)) {
+    semanticKindsBuffer = fs.readFileSync(semanticKindsPath);
+    semanticKinds = JSON.parse(semanticKindsBuffer.toString('utf8'));
+  }
+
   // ── Step 7: Write outputs ─────────────────────────────────────────────────
 
   if (options.outputSpec) {
@@ -656,7 +674,15 @@ export async function bundle(options: BundleOptions): Promise<BundleResult> {
     );
   }
 
-  return { spec: bundled, metadata, endpointMap: sortedEndpointMap, stats };
+  if (options.outputSemanticKinds && semanticKindsBuffer !== null) {
+    const dir = path.dirname(options.outputSemanticKinds);
+    fs.mkdirSync(dir, { recursive: true });
+    // Write the original bytes verbatim to preserve byte-identical parity
+    // with the upstream file.
+    fs.writeFileSync(options.outputSemanticKinds, semanticKindsBuffer);
+  }
+
+  return { spec: bundled, metadata, endpointMap: sortedEndpointMap, semanticKinds, stats };
 }
 
 function ensureComponents(
