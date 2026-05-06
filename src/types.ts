@@ -35,6 +35,15 @@ export interface FetchAndBundleOptions {
    */
   outputEndpointMap?: string;
 
+  /**
+   * Output path for the semantic-kinds registry JSON. When set, copies
+   * `<specDir>/semantic-kinds.json` to this path verbatim. If the registry
+   * file is absent in `specDir` (older refs predating camunda/camunda#52322),
+   * no file is written. See
+   * https://github.com/camunda/camunda-schema-bundler/issues/28
+   */
+  outputSemanticKinds?: string;
+
   /** Manual ref overrides. */
   manualOverrides?: Record<string, string>;
 
@@ -71,6 +80,15 @@ export interface BundleOptions {
   outputEndpointMap?: string;
 
   /**
+   * Output path for the semantic-kinds registry JSON. When set, copies
+   * `<specDir>/semantic-kinds.json` to this path verbatim. If the registry
+   * file is absent in `specDir` (older refs predating camunda/camunda#52322),
+   * no file is written. See
+   * https://github.com/camunda/camunda-schema-bundler/issues/28
+   */
+  outputSemanticKinds?: string;
+
+  /**
    * Manual ref overrides: map of path-local $ref → component schema name.
    * Used for known tricky paths that can't be resolved by signature matching.
    */
@@ -102,6 +120,14 @@ export interface BundleResult {
    * Always populated by `bundle()` (empty object if no operations are found).
    */
   endpointMap: Record<string, string>;
+
+  /**
+   * Parsed contents of `<specDir>/semantic-kinds.json`, or `null` if the file
+   * is absent (older refs predating camunda/camunda#52322). The bundler does
+   * not validate the registry shape — that is enforced upstream by the
+   * `verify-semantic-kinds-registered` Spectral rule.
+   */
+  semanticKinds: unknown;
 
   /** Stats about the bundling process. */
   stats: BundleStats;

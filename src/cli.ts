@@ -19,6 +19,7 @@
  *   --output-spec <path>      Output path for bundled JSON spec
  *   --output-metadata <path>  Output path for metadata IR JSON
  *   --output-endpoint-map <path>  Output path for endpoint map JSON
+ *   --output-semantic-kinds <path>  Output path for the semantic-kinds.json registry
  *   --deref-path-local        Inline remaining path-local $refs (for Microsoft.OpenApi)
  *   --allow-like-refs         Don't fail on surviving path-local $like refs
  *   --help                    Show help
@@ -39,6 +40,7 @@ interface CliArgs {
   outputSpec?: string;
   outputMetadata?: string;
   outputEndpointMap?: string;
+  outputSemanticKinds?: string;
   derefPathLocal: boolean;
   allowLikeRefs: boolean;
   skipFetchIfExists: boolean;
@@ -88,6 +90,9 @@ function parseArgs(argv: string[]): CliArgs {
         break;
       case '--output-endpoint-map':
         args.outputEndpointMap = argv[++i];
+        break;
+      case '--output-semantic-kinds':
+        args.outputSemanticKinds = argv[++i];
         break;
       case '--deref-path-local':
         args.derefPathLocal = true;
@@ -139,6 +144,7 @@ Bundle options:
   --output-spec <path>      Output path for bundled JSON spec
   --output-metadata <path>  Output path for metadata IR JSON
   --output-endpoint-map <path>  Output path for endpoint map JSON [DEPRECATED — removed in 3.0.0; use OperationSummary.sourceFile in spec-metadata.json]
+  --output-semantic-kinds <path>  Output path for the semantic-kinds.json registry (verbatim copy from specDir; omitted silently if absent)
   --deref-path-local        Inline remaining path-local $refs
   --allow-like-refs         Don't fail on surviving path-local $like refs
   --help, -h                Show this help
@@ -240,6 +246,7 @@ async function main(): Promise<void> {
     outputSpec: args.outputSpec,
     outputMetadata: args.outputMetadata,
     outputEndpointMap: args.outputEndpointMap,
+    outputSemanticKinds: args.outputSemanticKinds,
     dereferencePathLocalRefs: args.derefPathLocal,
     allowPathLocalLikeRefs: args.allowLikeRefs,
   });
@@ -288,6 +295,17 @@ async function main(): Promise<void> {
     console.log(
       `[camunda-schema-bundler] Endpoint map written to ${args.outputEndpointMap} (${Object.keys(result.endpointMap).length} endpoints)`
     );
+  }
+  if (args.outputSemanticKinds) {
+    if (result.semanticKinds !== null) {
+      console.log(
+        `[camunda-schema-bundler] Semantic-kinds registry written to ${args.outputSemanticKinds}`
+      );
+    } else {
+      console.log(
+        `[camunda-schema-bundler] No semantic-kinds.json found in specDir; skipping ${args.outputSemanticKinds}`
+      );
+    }
   }
 }
 
