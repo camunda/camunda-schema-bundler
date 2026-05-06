@@ -1,3 +1,10 @@
+# [2.3.0](https://github.com/camunda/camunda-schema-bundler/compare/v2.2.0...v2.3.0) (2026-05-06)
+
+
+### Features
+
+* bundle semantic-kinds.json registry alongside spec ([e910412](https://github.com/camunda/camunda-schema-bundler/commit/e9104121edff1a2137896b8c317568d5269db8c6)), closes [camunda/camunda#52322](https://github.com/camunda/camunda/issues/52322) [#28](https://github.com/camunda/camunda-schema-bundler/issues/28)
+
 # [2.2.0](https://github.com/camunda/camunda-schema-bundler/compare/v2.1.0...v2.2.0) (2026-05-05)
 
 
