@@ -13,7 +13,7 @@ The upstream Camunda REST API spec is split across many YAML files. When bundled
 - **URI-encoded refs** (`%24like` instead of `$like`) that confuse generators
 - **Inline duplicates** of schemas that should be component refs
 
-This utility solves all of these problems and produces three outputs:
+This utility solves all of these problems and produces the following outputs:
 
 1. **Bundled spec** (`rest-api.bundle.json`) — A single, clean OpenAPI 3 JSON file with all schemas as proper `#/components/schemas/...` refs
 2. **Metadata IR** (`spec-metadata.json`) — A structured intermediate representation of domain-specific information extracted from the spec
@@ -105,7 +105,7 @@ camunda-schema-bundler --version
 | `--output-spec <path>` | Output path for the bundled JSON spec |
 | `--output-metadata <path>` | Output path for the metadata IR JSON |
 | `--output-endpoint-map <path>` | _Deprecated, removed in 3.0.0._ Output path for the endpoint map JSON (method + path → source file). Use `OperationSummary.sourceFile` in `spec-metadata.json` instead. |
-| `--output-semantic-kinds <path>` | Output path for the `semantic-kinds.json` registry. Verbatim copy from `<specDir>/semantic-kinds.json`; omitted silently if the source file is absent. See [#28](https://github.com/camunda/camunda-schema-bundler/issues/28). |
+| `--output-semantic-kinds <path>` | Output path for the `semantic-kinds.json` registry. Verbatim copy from `<specDir>/semantic-kinds.json`; skipped if the source file is absent. See [#28](https://github.com/camunda/camunda-schema-bundler/issues/28). |
 | `--deref-path-local` | Inline remaining path-local `$ref`s (needed for Microsoft.OpenApi) |
 | `--allow-like-refs` | Don't fail on surviving path-local `$like` refs |
 | **General** | |

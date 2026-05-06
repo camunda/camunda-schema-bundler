@@ -127,7 +127,7 @@ export interface BundleResult {
    * not validate the registry shape — that is enforced upstream by the
    * `verify-semantic-kinds-registered` Spectral rule.
    */
-  semanticKinds: unknown;
+  semanticKinds: unknown | null;
 
   /** Stats about the bundling process. */
   stats: BundleStats;
