@@ -256,14 +256,14 @@ paths:
     );
   });
 
-  it('no path-local $refs survive in sort arrays across entire spec', async () => {
+  it('no path-local $refs survive anywhere in bundled paths', async () => {
     const result = await bundle({
       specDir,
       dereferencePathLocalRefs: true,
     });
     const spec = result.spec as Record<string, unknown>;
 
-    // Walk the entire spec and find any path-local $refs in sort.items positions
+    // Walk the entire spec and find any path-local $refs
     const pathLocalRefs: string[] = [];
     function walk(node: unknown, jsonPath: string): void {
       if (!node || typeof node !== 'object') return;
