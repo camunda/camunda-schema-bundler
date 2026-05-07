@@ -1,3 +1,11 @@
+## [2.4.1](https://github.com/camunda/camunda-schema-bundler/compare/v2.4.0...v2.4.1) (2026-05-07)
+
+
+### Bug Fixes
+
+* preserve cross-file $ref names through dedup ambiguity ([7a86e5b](https://github.com/camunda/camunda-schema-bundler/commit/7a86e5b478671b93e9afcc64f2a0abe9a00fec35))
+* preserve cross-file $ref names through dedup ambiguity ([c452015](https://github.com/camunda/camunda-schema-bundler/commit/c452015c0a51316b53c8907f2166090a57a45e07)), closes [#32](https://github.com/camunda/camunda-schema-bundler/issues/32)
+
 # [2.4.0](https://github.com/camunda/camunda-schema-bundler/compare/v2.3.0...v2.4.0) (2026-05-07)
 
 
