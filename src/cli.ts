@@ -22,6 +22,7 @@
  *   --output-semantic-kinds <path>  Output path for the semantic-kinds.json registry
  *   --deref-path-local        Inline remaining path-local $refs (for Microsoft.OpenApi)
  *   --allow-like-refs         Don't fail on surviving path-local $like refs
+ *   --allow-ambiguous-inlines Don't fail on ambiguous inline schemas
  *   --help                    Show help
  */
 import path from 'node:path';
@@ -152,6 +153,7 @@ Bundle options:
   --output-semantic-kinds <path>  Output path for the semantic-kinds.json registry (verbatim copy from specDir; skipped if absent)
   --deref-path-local        Inline remaining path-local $refs
   --allow-like-refs         Don't fail on surviving path-local $like refs
+  --allow-ambiguous-inlines Don't fail when inline schemas match multiple components
   --help, -h                Show this help
   --version, -v             Show version
 
