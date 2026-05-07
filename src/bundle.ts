@@ -172,7 +172,7 @@ function collectOriginalSchemaRefsFromPathItem(
       // The leading file portion (if any) is irrelevant — what matters
       // is the schema name at the end of the JSON pointer.
       const m = ref.match(/(?:^|#)\/components\/schemas\/([^\/]+)$/);
-      if (m) {
+      if (m && !out.has(jsonPath)) {
         out.set(jsonPath, m[1]);
       }
       // Don't recurse into a `$ref` node — its siblings are typically
@@ -263,6 +263,7 @@ interface SchemaAnalysis {
   exactSigCandidates: Map<string, string[]>;
   structSigCandidates: Map<string, string[]>;
   reverseRefIndex: Map<string, { source: string; propPath: string }[]>;
+  componentInternalRefs: Map<string, Map<string, string>>;
 }
 
 function analyzeSchemas(schemas: Record<string, unknown>): SchemaAnalysis {
@@ -301,7 +302,17 @@ function analyzeSchemas(schemas: Record<string, unknown>): SchemaAnalysis {
     collectRefs(schema as Record<string, unknown>, '', name, reverseRefIndex);
   }
 
-  return { exactSigMap, structSigMap, exactSigCandidates, structSigCandidates, reverseRefIndex };
+  // Precompute per-component-schema internal $refs. These are stable across
+  // dedup passes because component schemas are never mutated.
+  const componentInternalRefs = new Map<string, Map<string, string>>();
+  for (const [name, schema] of Object.entries(schemas)) {
+    if (!schema || typeof schema !== 'object') continue;
+    const map = new Map<string, string>();
+    collectComponentInternalRefs(schema, '', map);
+    if (map.size > 0) componentInternalRefs.set(name, map);
+  }
+
+  return { exactSigMap, structSigMap, exactSigCandidates, structSigCandidates, reverseRefIndex, componentInternalRefs };
 }
 
 function freshSignatureDedup(
@@ -310,23 +321,8 @@ function freshSignatureDedup(
   analysis: SchemaAnalysis,
   originalRefByJsonPath: Map<string, string>
 ): DedupResult {
-  // Build a per-component-schema index of internal $refs keyed by the
-  // relative json-path within the schema (matching the format `walk()`
-  // produces). This lets us recover the original ref name for a nested
-  // inline whose enclosing component schema is itself inlined at a
-  // path-level position. SwaggerParser preserves these internal refs
-  // because they're same-file from its perspective — they only get
-  // erased when the *enclosing* schema is inlined into a path.
-  // (camunda/camunda-schema-bundler#32)
-  const componentInternalRefs = new Map<string, Map<string, string>>();
-  for (const [name, schema] of Object.entries(schemas)) {
-    if (!schema || typeof schema !== 'object') continue;
-    const map = new Map<string, string>();
-    collectComponentInternalRefs(schema, '', map);
-    if (map.size > 0) componentInternalRefs.set(name, map);
-  }
   const AMBIGUOUS = '@@AMBIGUOUS@@';
-  const { exactSigMap, structSigMap, exactSigCandidates, structSigCandidates, reverseRefIndex } = analysis;
+  const { exactSigMap, structSigMap, exactSigCandidates, structSigCandidates, reverseRefIndex, componentInternalRefs } = analysis;
 
   let replaced = 0;
   const ambiguous: { path: string; candidates: string[] }[] = [];
