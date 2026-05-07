@@ -360,12 +360,17 @@ function disambiguateByContext(
   schemas: Record<string, unknown>,
   reverseRefIndex: Map<string, { source: string; propPath: string }[]>
 ): string | undefined {
-  // Walk up the parent chain to build the relative path from the inline
-  // to a containing request/response schema. Terminates naturally when
-  // the root is reached (no parent entry).
+  // Walk up the parent chain, collecting all schema-like ancestors as
+  // potential containers. Don't stop at the first one — composition
+  // wrappers (allOf/oneOf/anyOf items) look schema-like but are too
+  // narrow to match the reverse-ref index. We try each candidate
+  // from innermost to outermost.
   const pathSegments: string[] = [];
   let current: unknown = inlineObj;
-  let containerSchema: Record<string, unknown> | undefined;
+  const containerCandidates: {
+    schema: Record<string, unknown>;
+    relPath: string;
+  }[] = [];
 
   for (;;) {
     const parentInfo = parentMap.get(current);
@@ -373,80 +378,99 @@ function disambiguateByContext(
     pathSegments.unshift(parentInfo.key);
     current = parentInfo.parent;
 
-    // Check if this ancestor looks like a schema (has properties or allOf)
     const ancestor = current as Record<string, unknown>;
     if (
       ancestor['properties'] ||
       ancestor['allOf'] ||
       ancestor['type'] === 'object'
     ) {
-      containerSchema = ancestor;
-      break;
+      containerCandidates.push({
+        schema: ancestor,
+        relPath: pathSegments.join('.'),
+      });
     }
   }
 
-  if (!containerSchema) return undefined;
+  // Try each container candidate (innermost first)
+  for (const { schema: containerSchema, relPath } of containerCandidates) {
+    const relParts = relPath.split('.');
+    const containerPartial = stripAtPath(containerSchema, relParts);
 
-  // The relative path from the container to the inline (e.g., "properties.sort.items")
-  const relPath = pathSegments.join('.');
+    const matchingCandidates: string[] = [];
+    for (const candidate of candidates) {
+      const refs = reverseRefIndex.get(candidate);
+      if (!refs) continue;
 
-  // Find candidates that are referenced by a component schema at this same
-  // relative path, where that component schema partially matches the container
-  // (ignoring the ambiguous field itself)
-  const containerPartial = stripAtPath(containerSchema, relPath.split('.'));
+      for (const { source, propPath } of refs) {
+        if (propPath !== relPath) continue;
 
-  const matchingCandidates: string[] = [];
-  for (const candidate of candidates) {
-    const refs = reverseRefIndex.get(candidate);
-    if (!refs) continue;
-
-    for (const { source, propPath } of refs) {
-      // Check if the ref is at a matching path
-      if (propPath !== relPath) continue;
-
-      // Check if the source component schema partially matches the container
-      // (strip the ambiguous path from both before comparing)
-      const sourceSchema = schemas[source];
-      if (!sourceSchema || typeof sourceSchema !== 'object') continue;
-      const sourcePartial = stripAtPath(
-        sourceSchema as Record<string, unknown>,
-        relPath.split('.')
-      );
-      if (
-        structuralStringify(sourcePartial) ===
-        structuralStringify(containerPartial)
-      ) {
-        matchingCandidates.push(candidate);
-        break; // One match per candidate is enough
+        const sourceSchema = schemas[source];
+        if (!sourceSchema || typeof sourceSchema !== 'object') continue;
+        const sourcePartial = stripAtPath(
+          sourceSchema as Record<string, unknown>,
+          relParts
+        );
+        if (
+          structuralStringify(sourcePartial) ===
+          structuralStringify(containerPartial)
+        ) {
+          matchingCandidates.push(candidate);
+          break;
+        }
       }
     }
+
+    if (matchingCandidates.length === 1) {
+      return matchingCandidates[0];
+    }
   }
 
-  // Only disambiguate if exactly one candidate matches
-  if (matchingCandidates.length === 1) {
-    return matchingCandidates[0];
-  }
   return undefined;
 }
 
 /**
  * Create a deep copy of an object with the value at the given path removed.
  * Used to compare schemas while ignoring a specific field (the ambiguous one).
+ *
+ * When a path segment refers to an array-valued property (e.g. `allOf`),
+ * the strip operation is applied to every element of the array.
  */
 function stripAtPath(
   obj: Record<string, unknown>,
   pathParts: string[]
 ): Record<string, unknown> {
   const copy = JSON.parse(JSON.stringify(obj)) as Record<string, unknown>;
-  let current: Record<string, unknown> = copy;
-  for (let i = 0; i < pathParts.length - 1; i++) {
-    const part = pathParts[i];
-    if (!current[part] || typeof current[part] !== 'object') return copy;
-    current = current[part] as Record<string, unknown>;
-  }
-  const lastKey = pathParts[pathParts.length - 1];
-  delete current[lastKey];
+  stripAtPathInPlace(copy, pathParts, 0);
   return copy;
+}
+
+function stripAtPathInPlace(
+  node: Record<string, unknown>,
+  pathParts: string[],
+  depth: number
+): void {
+  if (depth >= pathParts.length) return;
+  const part = pathParts[depth];
+  const isLast = depth === pathParts.length - 1;
+  const child = node[part];
+
+  if (isLast) {
+    delete node[part];
+    return;
+  }
+
+  if (!child || typeof child !== 'object') return;
+
+  // If the child is an array, descend into each element
+  if (Array.isArray(child)) {
+    for (const item of child) {
+      if (item && typeof item === 'object') {
+        stripAtPathInPlace(item as Record<string, unknown>, pathParts, depth + 1);
+      }
+    }
+  } else {
+    stripAtPathInPlace(child as Record<string, unknown>, pathParts, depth + 1);
+  }
 }
 
 /** Default manual overrides for known tricky path-local refs. */

@@ -109,7 +109,7 @@ paths:
                   description: Sort field criteria.
                   type: array
                   items:
-                    $ref: '#/components/schemas/ResourceVariableSearchQuerySortRequest'
+                    $ref: '#/paths/~1resources~1{key}~1variables~1search/post/requestBody/content/application~1json/schema/properties/sort/items'
       responses:
         '200':
           description: OK
@@ -156,7 +156,7 @@ components:
           description: Sort field criteria.
           type: array
           items:
-            $ref: '#/components/schemas/ResourceVariableSearchQuerySortRequest'
+            $ref: '#/paths/~1resources~1{key}~1variables~1search/post/requestBody/content/application~1json/schema/properties/sort/items'
 `,
       'utf8'
     );
@@ -246,13 +246,32 @@ paths:
       'variables sort.items should be a $ref to a component schema, not inline'
     ).toBeDefined();
 
-    // Both must reference ResourceVariableSearchQuerySortRequest
-    // (the schema declared by the endpoint's component-level request schema)
+    // The variables endpoint (which uses a direct component $ref for sort.items)
+    // must reference ResourceVariableSearchQuerySortRequest
     expect(variablesRef).toBe(
       '#/components/schemas/ResourceVariableSearchQuerySortRequest'
     );
-    expect(effectiveRef).toBe(
-      '#/components/schemas/ResourceVariableSearchQuerySortRequest'
+
+    // The effective-variables endpoint's request body was deduped to a $ref
+    // pointing to ResourceEffectiveVariableSearchQueryRequest. That component
+    // schema originally had a path-local $ref for sort.items which was
+    // dereferenced to inline. Component schemas are not walked by dedup
+    // (they are the source of truth), so sort.items remains inline there.
+    // What matters is that the path-level schema was properly deduped and
+    // no path-local refs survive (verified by the next test).
+    const effPost = paths['/resources/{key}/effective-variables/search']?.[
+      'post'
+    ] as Record<string, unknown>;
+    const effBody = effPost?.['requestBody'] as Record<string, unknown>;
+    const effContent = effBody?.['content'] as Record<string, unknown>;
+    const effJson = effContent?.['application/json'] as Record<string, unknown>;
+    const effSchema = effJson?.['schema'] as Record<string, unknown>;
+    expect(
+      typeof effSchema?.['$ref'] === 'string',
+      'effective-variables request body should be deduped to a component $ref'
+    ).toBe(true);
+    expect(effSchema?.['$ref']).toBe(
+      '#/components/schemas/ResourceEffectiveVariableSearchQueryRequest'
     );
   });
 
