@@ -1,3 +1,16 @@
+# [2.4.0](https://github.com/camunda/camunda-schema-bundler/compare/v2.3.0...v2.4.0) (2026-05-07)
+
+
+### Bug Fixes
+
+* disambiguate ambiguous inline schemas via component-level ref context ([0ee1506](https://github.com/camunda/camunda-schema-bundler/commit/0ee150615f206790895426ff3bd48a5b2edad0ba))
+* Potential fix for pull request finding ([e551713](https://github.com/camunda/camunda-schema-bundler/commit/e55171380fbb491697c162c9bfee7296f0433918))
+
+
+### Features
+
+* fail hard when ambiguous inlines cannot be disambiguated ([636287b](https://github.com/camunda/camunda-schema-bundler/commit/636287badbba2cd5e26c7b510aa5d6b1d379e570))
+
 # [2.3.0](https://github.com/camunda/camunda-schema-bundler/compare/v2.2.0...v2.3.0) (2026-05-06)
 
 
