@@ -118,15 +118,31 @@ function promoteInlineSchemas(
  * description/title metadata) to catch dereferenced schemas that differ
  * only in metadata from their component counterparts.
  */
-function freshSignatureDedup(
-  bundled: Record<string, unknown>,
-  schemas: Record<string, unknown>
-): number {
-  // Build both exact and structural signature maps
-  // Mark ambiguous signatures (multiple component schemas share the same structure)
+interface DedupResult {
+  replaced: number;
+  ambiguous: { path: string; candidates: string[] }[];
+}
+
+/**
+ * Pre-computed schema analysis data that is stable across dedup passes
+ * (component schemas don't change during Step 4b). Computing this once
+ * avoids redundant full traversals on each pass.
+ */
+interface SchemaAnalysis {
+  exactSigMap: Map<string, string>;
+  structSigMap: Map<string, string>;
+  exactSigCandidates: Map<string, string[]>;
+  structSigCandidates: Map<string, string[]>;
+  reverseRefIndex: Map<string, { source: string; propPath: string }[]>;
+}
+
+function analyzeSchemas(schemas: Record<string, unknown>): SchemaAnalysis {
   const AMBIGUOUS = '@@AMBIGUOUS@@';
   const exactSigMap = new Map<string, string>();
   const structSigMap = new Map<string, string>();
+  const exactSigCandidates = new Map<string, string[]>();
+  const structSigCandidates = new Map<string, string[]>();
+
   for (const [name, schema] of Object.entries(schemas)) {
     if (!schema || typeof schema !== 'object') continue;
     const obj = schema as Record<string, unknown>;
@@ -137,39 +153,96 @@ function freshSignatureDedup(
     } else {
       exactSigMap.set(exactSig, name);
     }
+    if (!exactSigCandidates.has(exactSig)) exactSigCandidates.set(exactSig, []);
+    exactSigCandidates.get(exactSig)!.push(name);
+
     const structSig = structuralStringify(schema);
     if (structSigMap.has(structSig)) {
       structSigMap.set(structSig, AMBIGUOUS);
     } else {
       structSigMap.set(structSig, name);
     }
+    if (!structSigCandidates.has(structSig)) structSigCandidates.set(structSig, []);
+    structSigCandidates.get(structSig)!.push(name);
   }
 
+  const reverseRefIndex = new Map<string, { source: string; propPath: string }[]>();
+  for (const [name, schema] of Object.entries(schemas)) {
+    if (!schema || typeof schema !== 'object') continue;
+    collectRefs(schema as Record<string, unknown>, '', name, reverseRefIndex);
+  }
+
+  return { exactSigMap, structSigMap, exactSigCandidates, structSigCandidates, reverseRefIndex };
+}
+
+function freshSignatureDedup(
+  bundled: Record<string, unknown>,
+  schemas: Record<string, unknown>,
+  analysis: SchemaAnalysis
+): DedupResult {
+  const AMBIGUOUS = '@@AMBIGUOUS@@';
+  const { exactSigMap, structSigMap, exactSigCandidates, structSigCandidates, reverseRefIndex } = analysis;
+
   let replaced = 0;
+  const ambiguous: { path: string; candidates: string[] }[] = [];
   const seen = new Set<unknown>();
   const componentValues = new Set(Object.values(schemas));
 
-  function walk(node: unknown): void {
+  // Parent tracking: map from child object → { parent object, key in parent }
+  const parentMap = new Map<unknown, { parent: Record<string, unknown>; key: string }>();
+
+  function buildParentMap(node: unknown): void {
+    if (!node || typeof node !== 'object') return;
+    if (Array.isArray(node)) {
+      for (const item of node) {
+        if (item && typeof item === 'object') {
+          // Use the containing key (already set by the parent object entry)
+          // for consistent path format with collectRefs
+          buildParentMap(item);
+        }
+      }
+      return;
+    }
+    const obj = node as Record<string, unknown>;
+    for (const [key, val] of Object.entries(obj)) {
+      if (val && typeof val === 'object') {
+        parentMap.set(val, { parent: obj, key });
+        if (Array.isArray(val)) {
+          for (const item of val) {
+            if (item && typeof item === 'object') {
+              parentMap.set(item, { parent: obj, key });
+              buildParentMap(item);
+            }
+          }
+        } else {
+          buildParentMap(val);
+        }
+      }
+    }
+  }
+
+  function walk(node: unknown, jsonPath = ''): void {
     if (!node || typeof node !== 'object' || seen.has(node)) return;
     seen.add(node);
 
     if (componentValues.has(node)) {
       if (!Array.isArray(node)) {
-        for (const v of Object.values(node as Record<string, unknown>))
-          walk(v);
+        for (const [k, v] of Object.entries(node as Record<string, unknown>))
+          walk(v, `${jsonPath}.${k}`);
       }
       return;
     }
 
     if (Array.isArray(node)) {
-      for (const item of node) walk(item);
+      for (let idx = 0; idx < (node as unknown[]).length; idx++)
+        walk((node as unknown[])[idx], `${jsonPath}[${idx}]`);
       return;
     }
 
     const obj = node as Record<string, unknown>;
 
     // Recurse first (post-order)
-    for (const v of Object.values(obj)) walk(v);
+    for (const [k, v] of Object.entries(obj)) walk(v, `${jsonPath}.${k}`);
 
     if (obj['$ref']) return;
 
@@ -187,10 +260,24 @@ function freshSignatureDedup(
     if (matchName === AMBIGUOUS) matchName = undefined;
 
     // Fall back to structural match (ignores description, title)
+    let structSig: string | undefined;
     if (!matchName) {
-      const structSig = structuralStringify(obj);
+      structSig = structuralStringify(obj);
       matchName = structSigMap.get(structSig);
       if (matchName === AMBIGUOUS) matchName = undefined;
+    }
+
+    // Disambiguate via component-level $ref context when signature is ambiguous
+    if (!matchName) {
+      const candidates =
+        exactSigCandidates.get(exactSig) ??
+        structSigCandidates.get(structSig ?? structuralStringify(obj));
+      if (candidates && candidates.length > 1) {
+        matchName = disambiguateByContext(obj, candidates, parentMap, schemas, reverseRefIndex);
+        if (!matchName) {
+          ambiguous.push({ path: jsonPath, candidates: [...candidates] });
+        }
+      }
     }
 
     if (matchName) {
@@ -202,10 +289,188 @@ function freshSignatureDedup(
 
   const paths = bundled['paths'];
   if (paths && typeof paths === 'object') {
-    walk(paths);
+    buildParentMap(paths);
+    walk(paths, '#/paths');
   }
 
-  return replaced;
+  return { replaced, ambiguous };
+}
+
+/**
+ * Collect all $ref targets from a component schema, recording the property
+ * path where each ref appears (e.g., "properties.sort.items").
+ */
+function collectRefs(
+  node: Record<string, unknown>,
+  currentPath: string,
+  sourceName: string,
+  index: Map<string, { source: string; propPath: string }[]>
+): void {
+  if (typeof node['$ref'] === 'string') {
+    const ref = node['$ref'] as string;
+    if (ref.startsWith('#/components/schemas/')) {
+      const target = ref.replace('#/components/schemas/', '');
+      if (!index.has(target)) index.set(target, []);
+      index.get(target)!.push({ source: sourceName, propPath: currentPath });
+    }
+    return;
+  }
+  for (const [key, val] of Object.entries(node)) {
+    if (!val || typeof val !== 'object') continue;
+    if (Array.isArray(val)) {
+      for (const item of val) {
+        if (item && typeof item === 'object') {
+          collectRefs(
+            item as Record<string, unknown>,
+            currentPath ? `${currentPath}.${key}` : key,
+            sourceName,
+            index
+          );
+        }
+      }
+    } else {
+      collectRefs(
+        val as Record<string, unknown>,
+        currentPath ? `${currentPath}.${key}` : key,
+        sourceName,
+        index
+      );
+    }
+  }
+}
+
+/**
+ * Disambiguate an ambiguous inline schema by checking component-level context.
+ *
+ * Strategy: walk up the parent chain from the inline schema to find a containing
+ * schema-like object, then check if any component schema has a $ref to one of
+ * the ambiguous candidates at the same relative path AND partially matches
+ * the container (ignoring the ambiguous field itself).
+ *
+ * Example: inline at `sort.items` → parent is the sort array → grandparent is
+ * a request schema with `properties.sort`. If a component schema has
+ * `properties.sort.items.$ref → ResourceVariableSearchQuerySortRequest` and
+ * its structure (minus sort.items) matches the grandparent (minus sort.items),
+ * we pick that candidate.
+ */
+function disambiguateByContext(
+  inlineObj: Record<string, unknown>,
+  candidates: string[],
+  parentMap: Map<unknown, { parent: Record<string, unknown>; key: string }>,
+  schemas: Record<string, unknown>,
+  reverseRefIndex: Map<string, { source: string; propPath: string }[]>
+): string | undefined {
+  // Walk up the parent chain, collecting all schema-like ancestors as
+  // potential containers. Don't stop at the first one — composition
+  // wrappers (allOf/oneOf/anyOf items) look schema-like but are too
+  // narrow to match the reverse-ref index. We try each candidate
+  // from innermost to outermost.
+  const pathSegments: string[] = [];
+  let current: unknown = inlineObj;
+  const containerCandidates: {
+    schema: Record<string, unknown>;
+    relPath: string;
+  }[] = [];
+
+  for (;;) {
+    const parentInfo = parentMap.get(current);
+    if (!parentInfo) break;
+    pathSegments.unshift(parentInfo.key);
+    current = parentInfo.parent;
+
+    const ancestor = current as Record<string, unknown>;
+    if (
+      ancestor['properties'] ||
+      ancestor['allOf'] ||
+      ancestor['type'] === 'object'
+    ) {
+      containerCandidates.push({
+        schema: ancestor,
+        relPath: pathSegments.join('.'),
+      });
+    }
+  }
+
+  // Try each container candidate (innermost first)
+  for (const { schema: containerSchema, relPath } of containerCandidates) {
+    const relParts = relPath.split('.');
+    const containerPartial = stripAtPath(containerSchema, relParts);
+
+    const matchingCandidates: string[] = [];
+    for (const candidate of candidates) {
+      const refs = reverseRefIndex.get(candidate);
+      if (!refs) continue;
+
+      for (const { source, propPath } of refs) {
+        if (propPath !== relPath) continue;
+
+        const sourceSchema = schemas[source];
+        if (!sourceSchema || typeof sourceSchema !== 'object') continue;
+        const sourcePartial = stripAtPath(
+          sourceSchema as Record<string, unknown>,
+          relParts
+        );
+        if (
+          structuralStringify(sourcePartial) ===
+          structuralStringify(containerPartial)
+        ) {
+          matchingCandidates.push(candidate);
+          break;
+        }
+      }
+    }
+
+    if (matchingCandidates.length === 1) {
+      return matchingCandidates[0];
+    }
+  }
+
+  return undefined;
+}
+
+/**
+ * Create a deep copy of an object with the value at the given path removed.
+ * Used to compare schemas while ignoring a specific field (the ambiguous one).
+ *
+ * When a path segment refers to an array-valued property (e.g. `allOf`),
+ * the strip operation is applied to every element of the array.
+ */
+function stripAtPath(
+  obj: Record<string, unknown>,
+  pathParts: string[]
+): Record<string, unknown> {
+  const copy = JSON.parse(JSON.stringify(obj)) as Record<string, unknown>;
+  stripAtPathInPlace(copy, pathParts, 0);
+  return copy;
+}
+
+function stripAtPathInPlace(
+  node: Record<string, unknown>,
+  pathParts: string[],
+  depth: number
+): void {
+  if (depth >= pathParts.length) return;
+  const part = pathParts[depth];
+  const isLast = depth === pathParts.length - 1;
+  const child = node[part];
+
+  if (isLast) {
+    delete node[part];
+    return;
+  }
+
+  if (!child || typeof child !== 'object') return;
+
+  // If the child is an array, descend into each element
+  if (Array.isArray(child)) {
+    for (const item of child) {
+      if (item && typeof item === 'object') {
+        stripAtPathInPlace(item as Record<string, unknown>, pathParts, depth + 1);
+      }
+    }
+  } else {
+    stripAtPathInPlace(child as Record<string, unknown>, pathParts, depth + 1);
+  }
 }
 
 /** Default manual overrides for known tricky path-local refs. */
@@ -263,6 +528,7 @@ export async function bundle(options: BundleOptions): Promise<BundleResult> {
     augmentedSchemaCount: 0,
     promotedInlineSchemaCount: 0,
     freshDedupCount: 0,
+    ambiguousInlineCount: 0,
     dereferencedPathLocalRefCount: 0,
     pathLocalLikeRefCount: 0,
   };
@@ -589,9 +855,12 @@ export async function bundle(options: BundleOptions): Promise<BundleResult> {
   // may replace inner schemas with $refs, changing parent signatures so that
   // subsequent passes can match them to component schemas.
 
+  let lastAmbiguous: { path: string; candidates: string[] }[] = [];
+  const schemaAnalysis = analyzeSchemas(schemas);
   for (let dedupPass = 1; dedupPass <= 10; dedupPass++) {
-    const count = freshSignatureDedup(bundled, schemas);
+    const { replaced: count, ambiguous } = freshSignatureDedup(bundled, schemas, schemaAnalysis);
     stats.freshDedupCount += count;
+    lastAmbiguous = ambiguous;
     if (count === 0) break;
     console.log(
       `[camunda-schema-bundler] Fresh dedup pass ${dedupPass}: replaced ${count} inline duplicates`
@@ -599,6 +868,26 @@ export async function bundle(options: BundleOptions): Promise<BundleResult> {
   }
 
   // ── Step 5: Validate ──────────────────────────────────────────────────────
+
+  // Fail if any inline schemas remain that match multiple component schemas
+  // but could not be disambiguated. These will cause generator failures
+  // (wrong type selection or literal path-segment type names).
+  stats.ambiguousInlineCount = lastAmbiguous.length;
+  if (lastAmbiguous.length > 0 && !options.allowAmbiguousInlines) {
+    const details = lastAmbiguous
+      .map(
+        (a) =>
+          `  ${a.path}\n    candidates: ${a.candidates.join(', ')}`
+      )
+      .join('\n');
+    throw new Error(
+      `${lastAmbiguous.length} ambiguous inline schema(s) could not be resolved to a ` +
+        `unique component schema. Generators will produce incorrect types.\n${details}\n\n` +
+        `Fix: refactor these inline schemas into named component schemas or otherwise ` +
+        `make them structurally distinct so they resolve to a single component candidate. ` +
+        `Set allowAmbiguousInlines to bypass this validation if needed.`
+    );
+  }
 
   stats.pathLocalLikeRefCount = findPathLocalLikeRefs(bundled);
   if (stats.pathLocalLikeRefCount > 0 && !options.allowPathLocalLikeRefs) {

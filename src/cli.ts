@@ -22,6 +22,7 @@
  *   --output-semantic-kinds <path>  Output path for the semantic-kinds.json registry
  *   --deref-path-local        Inline remaining path-local $refs (for Microsoft.OpenApi)
  *   --allow-like-refs         Don't fail on surviving path-local $like refs
+ *   --allow-ambiguous-inlines Don't fail on ambiguous inline schemas
  *   --help                    Show help
  */
 import path from 'node:path';
@@ -43,6 +44,7 @@ interface CliArgs {
   outputSemanticKinds?: string;
   derefPathLocal: boolean;
   allowLikeRefs: boolean;
+  allowAmbiguousInlines: boolean;
   skipFetchIfExists: boolean;
   help: boolean;
   version: boolean;
@@ -54,6 +56,7 @@ function parseArgs(argv: string[]): CliArgs {
     autoRef: false,
     derefPathLocal: false,
     allowLikeRefs: false,
+    allowAmbiguousInlines: false,
     skipFetchIfExists: false,
     help: false,
     version: false,
@@ -99,6 +102,9 @@ function parseArgs(argv: string[]): CliArgs {
         break;
       case '--allow-like-refs':
         args.allowLikeRefs = true;
+        break;
+      case '--allow-ambiguous-inlines':
+        args.allowAmbiguousInlines = true;
         break;
       case '--skip-fetch-if-exists':
         args.skipFetchIfExists = true;
@@ -147,6 +153,7 @@ Bundle options:
   --output-semantic-kinds <path>  Output path for the semantic-kinds.json registry (verbatim copy from specDir; skipped if absent)
   --deref-path-local        Inline remaining path-local $refs
   --allow-like-refs         Don't fail on surviving path-local $like refs
+  --allow-ambiguous-inlines Don't fail when inline schemas match multiple components
   --help, -h                Show this help
   --version, -v             Show version
 
@@ -249,6 +256,7 @@ async function main(): Promise<void> {
     outputSemanticKinds: args.outputSemanticKinds,
     dereferencePathLocalRefs: args.derefPathLocal,
     allowPathLocalLikeRefs: args.allowLikeRefs,
+    allowAmbiguousInlines: args.allowAmbiguousInlines,
   });
 
   console.log(
