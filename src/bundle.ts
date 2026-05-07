@@ -124,6 +124,135 @@ interface DedupResult {
 }
 
 /**
+ * Collect every `$ref` that appears inside a parsed YAML path-item subtree
+ * and resolves to a `#/components/schemas/<NAME>` (same-file or cross-file).
+ *
+ * Records `(jsonPath in the bundled spec) -> NAME`, where `jsonPath` is
+ * built in the same format `freshSignatureDedup`'s `walk()` emits — e.g.
+ * `#/paths./mapping-rules.post.responses.201.content.application/json.schema`.
+ *
+ * Why this exists (camunda/camunda-schema-bundler#32): when
+ * `SwaggerParser.bundle()` inlines a cross-file `$ref` whose target lives
+ * in the root entry's `components/schemas`, the original ref *name* is
+ * erased from the operation site. If the upstream spec defines several
+ * named structural aliases for the same shape (e.g.
+ * `MappingRuleCreate{,Update}Result`), `freshSignatureDedup` then sees
+ * multiple candidates and the 2.4.0 fail-hard guard triggers — even
+ * though the upstream YAML was unambiguous. Recording the original ref
+ * name from the source YAML lets us recover that identity, deterministically,
+ * with no risk of picking the wrong alias.
+ */
+function collectOriginalSchemaRefsFromPathItem(
+  pathItem: unknown,
+  apiPath: string,
+  method: string,
+  out: Map<string, string>
+): void {
+  // Walk the operation subtree, building a jsonPath that matches the
+  // format `freshSignatureDedup.walk()` produces. Only `$ref` strings
+  // whose target is a component schema are recorded; refs to responses,
+  // parameters, etc. are ignored.
+  const root = pathItem;
+  if (!root || typeof root !== 'object' || Array.isArray(root)) return;
+  const operation = (root as Record<string, unknown>)[method];
+  if (!operation || typeof operation !== 'object') return;
+  const opPathPrefix = `#/paths./${apiPath.replace(/^\//, '')}.${method}`;
+
+  function visit(node: unknown, jsonPath: string): void {
+    if (!node || typeof node !== 'object') return;
+    if (Array.isArray(node)) {
+      for (let i = 0; i < node.length; i++) visit(node[i], `${jsonPath}[${i}]`);
+      return;
+    }
+    const obj = node as Record<string, unknown>;
+    const ref = obj['$ref'];
+    if (typeof ref === 'string') {
+      // Match either a same-file ref (`#/components/schemas/X`) or a
+      // cross-file ref whose fragment ends in `/components/schemas/X`.
+      // The leading file portion (if any) is irrelevant — what matters
+      // is the schema name at the end of the JSON pointer.
+      const m = ref.match(/(?:^|#)\/components\/schemas\/([^\/]+)$/);
+      if (m) {
+        out.set(jsonPath, m[1]);
+      }
+      // Don't recurse into a `$ref` node — its siblings are typically
+      // metadata, not schema content, and they don't contribute to the
+      // post-bundle inline.
+      return;
+    }
+    for (const [k, v] of Object.entries(obj)) visit(v, `${jsonPath}.${k}`);
+  }
+
+  visit(operation, opPathPrefix);
+}
+
+/**
+ * Recursively walk a component schema and record every `$ref` that targets
+ * another component schema, keyed by the json-path **relative to the schema
+ * root** (matching the format `freshSignatureDedup.walk()` produces, with
+ * an empty string representing the root itself).
+ *
+ * Used to recover the original ref name for an ambiguous nested inline
+ * whose enclosing path-level schema came from a `$ref` to this component.
+ * (camunda/camunda-schema-bundler#32)
+ */
+function collectComponentInternalRefs(
+  node: unknown,
+  relPath: string,
+  out: Map<string, string>
+): void {
+  if (!node || typeof node !== 'object') return;
+  if (Array.isArray(node)) {
+    for (let i = 0; i < node.length; i++) {
+      collectComponentInternalRefs(node[i], `${relPath}[${i}]`, out);
+    }
+    return;
+  }
+  const obj = node as Record<string, unknown>;
+  const ref = obj['$ref'];
+  if (typeof ref === 'string') {
+    const m = ref.match(/(?:^|#)\/components\/schemas\/([^/]+)$/);
+    if (m && relPath !== '') out.set(relPath, m[1]);
+    return;
+  }
+  for (const [k, v] of Object.entries(obj)) {
+    collectComponentInternalRefs(v, `${relPath}.${k}`, out);
+  }
+}
+
+/**
+ * For an ambiguous inline at `jsonPath`, walk back up the path looking for
+ * the longest prefix that has a recorded original ref name. If found and
+ * the matched component has an internal ref at the suffix relative path,
+ * return that nested ref name. Otherwise undefined.
+ *
+ * (camunda/camunda-schema-bundler#32)
+ */
+function lookupNestedOriginalRef(
+  jsonPath: string,
+  originalRefByJsonPath: Map<string, string>,
+  componentInternalRefs: Map<string, Map<string, string>>
+): string | undefined {
+  // Iterate prefix boundaries from longest to shortest. Boundaries are at
+  // `.` and `[` characters \u2014 the same separators `walk()` uses to build
+  // the path.
+  for (let i = jsonPath.length - 1; i > 0; i--) {
+    const c = jsonPath[i];
+    if (c !== '.' && c !== '[') continue;
+    const prefix = jsonPath.slice(0, i);
+    const componentName = originalRefByJsonPath.get(prefix);
+    if (!componentName) continue;
+    const internal = componentInternalRefs.get(componentName);
+    if (!internal) return undefined;
+    // The suffix is the relative path inside the component, starting at
+    // the same separator (so `properties.sort.items` becomes `.properties.sort.items`).
+    const suffix = jsonPath.slice(i);
+    return internal.get(suffix);
+  }
+  return undefined;
+}
+
+/**
  * Pre-computed schema analysis data that is stable across dedup passes
  * (component schemas don't change during Step 4b). Computing this once
  * avoids redundant full traversals on each pass.
@@ -178,8 +307,24 @@ function analyzeSchemas(schemas: Record<string, unknown>): SchemaAnalysis {
 function freshSignatureDedup(
   bundled: Record<string, unknown>,
   schemas: Record<string, unknown>,
-  analysis: SchemaAnalysis
+  analysis: SchemaAnalysis,
+  originalRefByJsonPath: Map<string, string>
 ): DedupResult {
+  // Build a per-component-schema index of internal $refs keyed by the
+  // relative json-path within the schema (matching the format `walk()`
+  // produces). This lets us recover the original ref name for a nested
+  // inline whose enclosing component schema is itself inlined at a
+  // path-level position. SwaggerParser preserves these internal refs
+  // because they're same-file from its perspective — they only get
+  // erased when the *enclosing* schema is inlined into a path.
+  // (camunda/camunda-schema-bundler#32)
+  const componentInternalRefs = new Map<string, Map<string, string>>();
+  for (const [name, schema] of Object.entries(schemas)) {
+    if (!schema || typeof schema !== 'object') continue;
+    const map = new Map<string, string>();
+    collectComponentInternalRefs(schema, '', map);
+    if (map.size > 0) componentInternalRefs.set(name, map);
+  }
   const AMBIGUOUS = '@@AMBIGUOUS@@';
   const { exactSigMap, structSigMap, exactSigCandidates, structSigCandidates, reverseRefIndex } = analysis;
 
@@ -274,6 +419,33 @@ function freshSignatureDedup(
         structSigCandidates.get(structSig ?? structuralStringify(obj));
       if (candidates && candidates.length > 1) {
         matchName = disambiguateByContext(obj, candidates, parentMap, schemas, reverseRefIndex);
+        // Fallback 1: if the upstream YAML's original `$ref` at this exact
+        // jsonPath named one of the candidates, that name is authoritative.
+        // The signature match guarantees the schema is structurally that
+        // component; the recorded name resolves *which alias* it was.
+        // See camunda/camunda-schema-bundler#32.
+        if (!matchName) {
+          const originalName = originalRefByJsonPath.get(jsonPath);
+          if (originalName && candidates.includes(originalName)) {
+            matchName = originalName;
+          }
+        }
+        // Fallback 2: a nested inline whose enclosing path-level schema
+        // was originally a `$ref` to component C. Walk back up jsonPath to
+        // find the longest prefix that maps to a recorded original ref;
+        // the suffix is the relative path inside that component schema.
+        // The component's preserved internal refs (bundled.components.schemas)
+        // tell us which alias the inline represents.
+        if (!matchName) {
+          const nestedName = lookupNestedOriginalRef(
+            jsonPath,
+            originalRefByJsonPath,
+            componentInternalRefs
+          );
+          if (nestedName && candidates.includes(nestedName)) {
+            matchName = nestedName;
+          }
+        }
         if (!matchName) {
           ambiguous.push({ path: jsonPath, candidates: [...candidates] });
         }
@@ -564,6 +736,13 @@ export async function bundle(options: BundleOptions): Promise<BundleResult> {
   // "get /process-instances"). Used to populate `OperationSummary.sourceFile`
   // in the metadata IR. See https://github.com/camunda/camunda-schema-bundler/issues/21
   const sourceFileByOp = new Map<string, string>();
+  // Original schema-ref name index keyed by the bundled-spec jsonPath at
+  // which the inline schema will appear post-bundle. Populated by scanning
+  // each upstream YAML's path-item operations for `$ref` strings whose
+  // target is a `#/components/schemas/<NAME>`. Consumed by
+  // `freshSignatureDedup` to break structural-alias ambiguity without
+  // resorting to sort-order picks. See camunda/camunda-schema-bundler#32.
+  const originalRefByJsonPath = new Map<string, string>();
   const opsSeen = new Set<string>();
   // `bundled.paths` is constant for the whole run; resolve it once and
   // pre-compute the set of bundled (path, method) pairs so the per-file
@@ -626,6 +805,17 @@ export async function bundle(options: BundleOptions): Promise<BundleResult> {
             opsSeen.add(op);
             endpointMap[op] = relFile;
             sourceFileByOp.set(`${key} ${apiPath}`, relFile);
+          }
+          // Record original schema-ref names from this YAML's path items
+          // for every method that made it into the bundled spec.
+          // (camunda/camunda-schema-bundler#32)
+          for (const key of methods) {
+            collectOriginalSchemaRefsFromPathItem(
+              pathItem,
+              apiPath,
+              key,
+              originalRefByJsonPath
+            );
           }
         }
       }
@@ -858,7 +1048,12 @@ export async function bundle(options: BundleOptions): Promise<BundleResult> {
   let lastAmbiguous: { path: string; candidates: string[] }[] = [];
   const schemaAnalysis = analyzeSchemas(schemas);
   for (let dedupPass = 1; dedupPass <= 10; dedupPass++) {
-    const { replaced: count, ambiguous } = freshSignatureDedup(bundled, schemas, schemaAnalysis);
+    const { replaced: count, ambiguous } = freshSignatureDedup(
+      bundled,
+      schemas,
+      schemaAnalysis,
+      originalRefByJsonPath
+    );
     stats.freshDedupCount += count;
     lastAmbiguous = ambiguous;
     if (count === 0) break;
