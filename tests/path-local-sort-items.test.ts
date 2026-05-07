@@ -290,3 +290,100 @@ paths:
     ).toHaveLength(0);
   });
 });
+
+describe('ambiguous inline detection (hard failure)', () => {
+  let specDir: string;
+
+  beforeAll(() => {
+    // Create a spec where two component schemas are structurally identical
+    // but NO reverse-ref context exists to disambiguate them. The inline
+    // schema in the path matches both — disambiguation must fail.
+    specDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), 'bundler-ambiguous-fail-test-')
+    );
+
+    // A single-file spec (monolithic) with ambiguous inline schemas.
+    // Neither SortA nor SortB is referenced by any component schema, so
+    // the reverse-ref index provides no disambiguation signal.
+    fs.writeFileSync(
+      path.join(specDir, 'rest-api.yaml'),
+      `openapi: '3.0.3'
+info:
+  title: Ambiguous Test
+  version: '1.0.0'
+paths:
+  /things/search:
+    post:
+      operationId: searchThings
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                sort:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      field:
+                        type: string
+                        enum: [name, age]
+                      order:
+                        type: string
+                        enum: [ASC, DESC]
+      responses:
+        '200':
+          description: OK
+components:
+  schemas:
+    SortA:
+      type: object
+      properties:
+        field:
+          type: string
+          enum: [name, age]
+        order:
+          type: string
+          enum: [ASC, DESC]
+    SortB:
+      type: object
+      properties:
+        field:
+          type: string
+          enum: [name, age]
+        order:
+          type: string
+          enum: [ASC, DESC]
+`,
+      'utf8'
+    );
+  });
+
+  it('throws when ambiguous inlines cannot be disambiguated', async () => {
+    await expect(
+      bundle({
+        specDir,
+        dereferencePathLocalRefs: true,
+      })
+    ).rejects.toThrow(/ambiguous inline schema/i);
+  });
+
+  it('lists the candidates in the error message', async () => {
+    await expect(
+      bundle({
+        specDir,
+        dereferencePathLocalRefs: true,
+      })
+    ).rejects.toThrow(/SortA.*SortB|SortB.*SortA/);
+  });
+
+  it('succeeds when allowAmbiguousInlines is set', async () => {
+    const result = await bundle({
+      specDir,
+      dereferencePathLocalRefs: true,
+      allowAmbiguousInlines: true,
+    });
+    expect(result.stats.ambiguousInlineCount).toBeGreaterThan(0);
+  });
+});

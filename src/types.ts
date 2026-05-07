@@ -53,6 +53,9 @@ export interface FetchAndBundleOptions {
   /** If true, allow surviving path-local $like refs. */
   allowPathLocalLikeRefs?: boolean;
 
+  /** If true, allow ambiguous inline schemas that match multiple component schemas. */
+  allowAmbiguousInlines?: boolean;
+
   /** If true and spec already exists locally, skip fetching. */
   skipFetchIfExists?: boolean;
 }
@@ -106,6 +109,12 @@ export interface BundleOptions {
    * Default: false (fail-fast).
    */
   allowPathLocalLikeRefs?: boolean;
+
+  /**
+   * If true, allow ambiguous inline schemas that match multiple component
+   * schemas without failing. Default: false (fail-fast).
+   */
+  allowAmbiguousInlines?: boolean;
 }
 
 export interface BundleResult {
@@ -139,6 +148,7 @@ export interface BundleStats {
   augmentedSchemaCount: number;
   promotedInlineSchemaCount: number;
   freshDedupCount: number;
+  ambiguousInlineCount: number;
   dereferencedPathLocalRefCount: number;
   pathLocalLikeRefCount: number;
 

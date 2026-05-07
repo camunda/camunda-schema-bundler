@@ -43,6 +43,7 @@ interface CliArgs {
   outputSemanticKinds?: string;
   derefPathLocal: boolean;
   allowLikeRefs: boolean;
+  allowAmbiguousInlines: boolean;
   skipFetchIfExists: boolean;
   help: boolean;
   version: boolean;
@@ -54,6 +55,7 @@ function parseArgs(argv: string[]): CliArgs {
     autoRef: false,
     derefPathLocal: false,
     allowLikeRefs: false,
+    allowAmbiguousInlines: false,
     skipFetchIfExists: false,
     help: false,
     version: false,
@@ -99,6 +101,9 @@ function parseArgs(argv: string[]): CliArgs {
         break;
       case '--allow-like-refs':
         args.allowLikeRefs = true;
+        break;
+      case '--allow-ambiguous-inlines':
+        args.allowAmbiguousInlines = true;
         break;
       case '--skip-fetch-if-exists':
         args.skipFetchIfExists = true;
@@ -249,6 +254,7 @@ async function main(): Promise<void> {
     outputSemanticKinds: args.outputSemanticKinds,
     dereferencePathLocalRefs: args.derefPathLocal,
     allowPathLocalLikeRefs: args.allowLikeRefs,
+    allowAmbiguousInlines: args.allowAmbiguousInlines,
   });
 
   console.log(

@@ -118,10 +118,15 @@ function promoteInlineSchemas(
  * description/title metadata) to catch dereferenced schemas that differ
  * only in metadata from their component counterparts.
  */
+interface DedupResult {
+  replaced: number;
+  ambiguous: { path: string; candidates: string[] }[];
+}
+
 function freshSignatureDedup(
   bundled: Record<string, unknown>,
   schemas: Record<string, unknown>
-): number {
+): DedupResult {
   // Build both exact and structural signature maps
   // Mark ambiguous signatures (multiple component schemas share the same structure)
   const AMBIGUOUS = '@@AMBIGUOUS@@';
@@ -165,6 +170,7 @@ function freshSignatureDedup(
   }
 
   let replaced = 0;
+  const ambiguous: { path: string; candidates: string[] }[] = [];
   const seen = new Set<unknown>();
   const componentValues = new Set(Object.values(schemas));
 
@@ -186,27 +192,28 @@ function freshSignatureDedup(
     }
   }
 
-  function walk(node: unknown): void {
+  function walk(node: unknown, jsonPath = ''): void {
     if (!node || typeof node !== 'object' || seen.has(node)) return;
     seen.add(node);
 
     if (componentValues.has(node)) {
       if (!Array.isArray(node)) {
-        for (const v of Object.values(node as Record<string, unknown>))
-          walk(v);
+        for (const [k, v] of Object.entries(node as Record<string, unknown>))
+          walk(v, `${jsonPath}.${k}`);
       }
       return;
     }
 
     if (Array.isArray(node)) {
-      for (const item of node) walk(item);
+      for (let idx = 0; idx < (node as unknown[]).length; idx++)
+        walk((node as unknown[])[idx], `${jsonPath}[${idx}]`);
       return;
     }
 
     const obj = node as Record<string, unknown>;
 
     // Recurse first (post-order)
-    for (const v of Object.values(obj)) walk(v);
+    for (const [k, v] of Object.entries(obj)) walk(v, `${jsonPath}.${k}`);
 
     if (obj['$ref']) return;
 
@@ -237,6 +244,9 @@ function freshSignatureDedup(
         structSigCandidates.get(structuralStringify(obj));
       if (candidates && candidates.length > 1) {
         matchName = disambiguateByContext(obj, candidates, parentMap, schemas, reverseRefIndex);
+        if (!matchName) {
+          ambiguous.push({ path: jsonPath, candidates: [...candidates] });
+        }
       }
     }
 
@@ -250,10 +260,10 @@ function freshSignatureDedup(
   const paths = bundled['paths'];
   if (paths && typeof paths === 'object') {
     buildParentMap(paths);
-    walk(paths);
+    walk(paths, '#/paths');
   }
 
-  return replaced;
+  return { replaced, ambiguous };
 }
 
 /**
@@ -463,6 +473,7 @@ export async function bundle(options: BundleOptions): Promise<BundleResult> {
     augmentedSchemaCount: 0,
     promotedInlineSchemaCount: 0,
     freshDedupCount: 0,
+    ambiguousInlineCount: 0,
     dereferencedPathLocalRefCount: 0,
     pathLocalLikeRefCount: 0,
   };
@@ -789,9 +800,11 @@ export async function bundle(options: BundleOptions): Promise<BundleResult> {
   // may replace inner schemas with $refs, changing parent signatures so that
   // subsequent passes can match them to component schemas.
 
+  let lastAmbiguous: { path: string; candidates: string[] }[] = [];
   for (let dedupPass = 1; dedupPass <= 10; dedupPass++) {
-    const count = freshSignatureDedup(bundled, schemas);
+    const { replaced: count, ambiguous } = freshSignatureDedup(bundled, schemas);
     stats.freshDedupCount += count;
+    lastAmbiguous = ambiguous;
     if (count === 0) break;
     console.log(
       `[camunda-schema-bundler] Fresh dedup pass ${dedupPass}: replaced ${count} inline duplicates`
@@ -799,6 +812,24 @@ export async function bundle(options: BundleOptions): Promise<BundleResult> {
   }
 
   // ── Step 5: Validate ──────────────────────────────────────────────────────
+
+  // Fail if any inline schemas remain that match multiple component schemas
+  // but could not be disambiguated. These will cause generator failures
+  // (wrong type selection or literal path-segment type names).
+  stats.ambiguousInlineCount = lastAmbiguous.length;
+  if (lastAmbiguous.length > 0 && !options.allowAmbiguousInlines) {
+    const details = lastAmbiguous
+      .map(
+        (a) =>
+          `  ${a.path}\n    candidates: ${a.candidates.join(', ')}`
+      )
+      .join('\n');
+    throw new Error(
+      `${lastAmbiguous.length} ambiguous inline schema(s) could not be resolved to a ` +
+        `unique component schema. Generators will produce incorrect types.\n${details}\n\n` +
+        `Fix: add manual overrides for these paths, or set allowAmbiguousInlines to bypass.`
+    );
+  }
 
   stats.pathLocalLikeRefCount = findPathLocalLikeRefs(bundled);
   if (stats.pathLocalLikeRefCount > 0 && !options.allowPathLocalLikeRefs) {
