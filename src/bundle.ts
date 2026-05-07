@@ -859,7 +859,9 @@ export async function bundle(options: BundleOptions): Promise<BundleResult> {
     throw new Error(
       `${lastAmbiguous.length} ambiguous inline schema(s) could not be resolved to a ` +
         `unique component schema. Generators will produce incorrect types.\n${details}\n\n` +
-        `Fix: add manual overrides for these paths, or set allowAmbiguousInlines to bypass.`
+        `Fix: refactor these inline schemas into named component schemas or otherwise ` +
+        `make them structurally distinct so they resolve to a single component candidate. ` +
+        `Set allowAmbiguousInlines to bypass this validation if needed.`
     );
   }
 
