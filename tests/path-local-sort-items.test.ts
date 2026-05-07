@@ -406,3 +406,223 @@ components:
     expect(result.stats.ambiguousInlineCount).toBeGreaterThan(0);
   });
 });
+
+/**
+ * Regression test for fallback #2 (`lookupNestedOriginalRef`):
+ *
+ * When SwaggerParser.bundle() inlines a cross-file component at a path site,
+ * nested sub-schemas lose their `$ref` identity. If two component schemas are
+ * structurally identical (ambiguous), the dedup can't disambiguate via
+ * signature alone. Fallback #1 checks the original ref at the *exact*
+ * jsonPath — but that only works for the top-level inline, not for nested
+ * children.
+ *
+ * Fallback #2 walks *up* the jsonPath to find the longest prefix that maps
+ * to a recorded original ref name (the enclosing component), then looks up
+ * the suffix in that component's internal `$ref` map. This test verifies
+ * that a deeply nested inline inside an inlined cross-file component is
+ * resolved to the correct candidate via this mechanism.
+ */
+describe('fallback #2: nested inline via component internal refs', () => {
+  let specDir: string;
+
+  beforeAll(() => {
+    specDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), 'bundler-nested-fallback2-test-')
+    );
+
+    // shared-models.yaml — common schemas
+    fs.writeFileSync(
+      path.join(specDir, 'shared-models.yaml'),
+      `openapi: '3.0.3'
+info:
+  title: Shared Models
+  version: '1.0.0'
+paths: {}
+components:
+  schemas:
+    SortOrderEnum:
+      type: string
+      enum: [ASC, DESC]
+`,
+      'utf8'
+    );
+
+    // orders.yaml — defines OrderSearchRequest with OrderSortRequest.
+    // The enclosing request schema has a 'statusFilter' property to make
+    // it structurally unique (so SwaggerParser doesn't path-local-ref it
+    // to the invoice endpoint).
+    fs.writeFileSync(
+      path.join(specDir, 'orders.yaml'),
+      `openapi: '3.0.3'
+info:
+  title: Orders
+  version: '1.0.0'
+paths:
+  /orders/search:
+    post:
+      operationId: searchOrders
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/OrderSearchRequest'
+      responses:
+        '200':
+          description: OK
+components:
+  schemas:
+    OrderSortRequest:
+      type: object
+      properties:
+        field:
+          description: The field to sort by.
+          type: string
+          enum: [orderDate, total, status]
+        order:
+          $ref: 'shared-models.yaml#/components/schemas/SortOrderEnum'
+      required: [field]
+    OrderSearchRequest:
+      type: object
+      properties:
+        sort:
+          type: array
+          items:
+            $ref: '#/components/schemas/OrderSortRequest'
+        statusFilter:
+          type: string
+          description: Filter by order status.
+`,
+      'utf8'
+    );
+
+    // invoices.yaml — defines InvoiceSearchRequest with InvoiceSortRequest.
+    // InvoiceSortRequest is structurally identical to OrderSortRequest.
+    // InvoiceSearchRequest has 'amountFilter' (different from 'statusFilter')
+    // to ensure a distinct structure at the enclosing level.
+    fs.writeFileSync(
+      path.join(specDir, 'invoices.yaml'),
+      `openapi: '3.0.3'
+info:
+  title: Invoices
+  version: '1.0.0'
+paths:
+  /invoices/search:
+    post:
+      operationId: searchInvoices
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/InvoiceSearchRequest'
+      responses:
+        '200':
+          description: OK
+components:
+  schemas:
+    InvoiceSortRequest:
+      type: object
+      properties:
+        field:
+          description: The field to sort by.
+          type: string
+          enum: [orderDate, total, status]
+        order:
+          $ref: 'shared-models.yaml#/components/schemas/SortOrderEnum'
+      required: [field]
+    InvoiceSearchRequest:
+      type: object
+      properties:
+        sort:
+          type: array
+          items:
+            $ref: '#/components/schemas/InvoiceSortRequest'
+        amountFilter:
+          type: number
+          description: Filter by invoice amount.
+`,
+      'utf8'
+    );
+
+    // rest-api.yaml — entry point with cross-file path refs.
+    // SwaggerParser.bundle() will inline the request schemas at path
+    // sites because the $refs inside orders.yaml/invoices.yaml are
+    // relative to those files (not the entry file).
+    fs.writeFileSync(
+      path.join(specDir, 'rest-api.yaml'),
+      `openapi: '3.0.3'
+info:
+  title: Test API
+  version: '1.0.0'
+paths:
+  /orders/search:
+    $ref: 'orders.yaml#/paths/~1orders~1search'
+  /invoices/search:
+    $ref: 'invoices.yaml#/paths/~1invoices~1search'
+`,
+      'utf8'
+    );
+  });
+
+  it('resolves nested sort.items via fallback #2 (component internal refs)', async () => {
+    const result = await bundle({ specDir });
+    const spec = result.spec as Record<string, unknown>;
+    const paths = spec['paths'] as Record<string, Record<string, unknown>>;
+    const schemas = (spec['components'] as Record<string, unknown>)[
+      'schemas'
+    ] as Record<string, unknown>;
+
+    // Both sort schemas must exist as components
+    expect(schemas['OrderSortRequest']).toBeDefined();
+    expect(schemas['InvoiceSortRequest']).toBeDefined();
+
+    // Helper to extract sort.items ref from a path's POST request body
+    function getSortItemsRef(apiPath: string): string | undefined {
+      const post = paths[apiPath]?.['post'] as Record<string, unknown>;
+      const body = post?.['requestBody'] as Record<string, unknown>;
+      const content = body?.['content'] as Record<string, unknown>;
+      const json = content?.['application/json'] as Record<string, unknown>;
+      const schema = json?.['schema'] as Record<string, unknown>;
+      if (!schema) return undefined;
+
+      // If the request body was deduped to a component $ref, follow it
+      if (typeof schema['$ref'] === 'string') {
+        const refName = (schema['$ref'] as string).replace(
+          '#/components/schemas/',
+          ''
+        );
+        const componentSchema = schemas[refName] as Record<string, unknown>;
+        const props = componentSchema?.['properties'] as Record<
+          string,
+          unknown
+        >;
+        const sort = props?.['sort'] as Record<string, unknown>;
+        const items = sort?.['items'] as Record<string, unknown>;
+        return items?.['$ref'] as string | undefined;
+      }
+
+      // Inline — check sort.items directly
+      const props = schema['properties'] as Record<string, unknown>;
+      const sort = props?.['sort'] as Record<string, unknown>;
+      const items = sort?.['items'] as Record<string, unknown>;
+      return items?.['$ref'] as string | undefined;
+    }
+
+    // /orders/search originally referenced OrderSearchRequest, which
+    // internally uses OrderSortRequest. After bundling, the request body
+    // is inlined (cross-file ref erased). Fallback #2 walks up from the
+    // nested sort.items jsonPath to find the enclosing OrderSearchRequest
+    // entry in originalRefByJsonPath, then uses OrderSearchRequest's
+    // internal $ref map to recover OrderSortRequest.
+    const orderRef = getSortItemsRef('/orders/search');
+    const invoiceRef = getSortItemsRef('/invoices/search');
+
+    expect(orderRef).toBe('#/components/schemas/OrderSortRequest');
+    expect(invoiceRef).toBe('#/components/schemas/InvoiceSortRequest');
+  });
+
+  it('does not leave ambiguous inlines when fallback #2 succeeds', async () => {
+    const result = await bundle({ specDir });
+    expect(result.stats.ambiguousInlineCount).toBe(0);
+  });
+});
