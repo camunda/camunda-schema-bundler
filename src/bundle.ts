@@ -189,8 +189,9 @@ function collectOriginalSchemaRefsFromPathItem(
 /**
  * Recursively walk a component schema and record every `$ref` that targets
  * another component schema, keyed by the json-path **relative to the schema
- * root** (matching the format `freshSignatureDedup.walk()` produces, with
- * an empty string representing the root itself).
+ * root** (matching the format `freshSignatureDedup.walk()` produces). Only
+ * nested refs are recorded — refs at the root level (`relPath === ''`) are
+ * skipped because they represent the component schema itself, not a child.
  *
  * Used to recover the original ref name for an ambiguous nested inline
  * whose enclosing path-level schema came from a `$ref` to this component.
@@ -243,7 +244,7 @@ function lookupNestedOriginalRef(
     const componentName = originalRefByJsonPath.get(prefix);
     if (!componentName) continue;
     const internal = componentInternalRefs.get(componentName);
-    if (!internal) return undefined;
+    if (!internal) continue;
     // The suffix is the relative path inside the component, starting at
     // the same separator (so `properties.sort.items` becomes `.properties.sort.items`).
     const suffix = jsonPath.slice(i);
