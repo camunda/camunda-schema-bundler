@@ -20,6 +20,7 @@ import {
   canonicalStringify,
   structuralStringify,
   findPathLocalLikeRefs,
+  sortRequiredArrays,
 } from './helpers.js';
 import type { BundleOptions, BundleResult, BundleStats } from './types.js';
 import { extractMetadata } from './metadata.js';
@@ -1092,6 +1093,15 @@ export async function bundle(options: BundleOptions): Promise<BundleResult> {
   const paths = bundled['paths'] as Record<string, unknown> | undefined;
   stats.pathCount = paths ? Object.keys(paths).length : 0;
   stats.schemaCount = Object.keys(schemas).length;
+
+  // ── Step 5b: Normalize unordered-set fields for deterministic output ──────
+  //
+  // JSON Schema treats `required` as a set, but upstream serializers (the
+  // Java/Jackson pipeline behind camunda/camunda) emit it from unordered
+  // collections, so the array order flips between otherwise-identical runs.
+  // Sort here so the bundled output is byte-identical for byte-identical
+  // input — see camunda/camunda-schema-bundler#35.
+  sortRequiredArrays(bundled);
 
   // ── Step 6: Extract metadata IR ───────────────────────────────────────────
 
