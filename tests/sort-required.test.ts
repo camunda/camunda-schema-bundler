@@ -156,3 +156,132 @@ components:
     expect(JSON.stringify(a.spec)).toEqual(JSON.stringify(b.spec));
   });
 });
+
+/**
+ * Stronger invariant for #35: the bundled output must be invariant under
+ * permutation of upstream `required` arrays. This locks in that the
+ * normalization runs BEFORE signature-based dedup / ambiguity detection
+ * (Step 2b), not just before serialization. If the sort were applied
+ * after signature computation, two upstreams differing only in
+ * `required` order could produce different dedup decisions and the
+ * bundles would diverge — even though the final `required` arrays were
+ * each individually sorted.
+ *
+ * See PR #36 review thread.
+ */
+describe('bundle is invariant under upstream `required`-order permutations (#35)', () => {
+  function makeSpec(inlineRequired: string[], componentRequired: string[]) {
+    return {
+      openapi: '3.0.3',
+      info: { title: 'Test', version: '1.0.0' },
+      paths: {
+        '/items': {
+          post: {
+            operationId: 'createItem',
+            requestBody: {
+              content: {
+                'application/json': {
+                  // Inline schema structurally identical to ItemRequest
+                  // except for `required` order.
+                  schema: {
+                    type: 'object',
+                    properties: {
+                      name: { type: 'string' },
+                      value: { type: 'integer' },
+                      tag: { type: 'string' },
+                    },
+                    required: inlineRequired,
+                  },
+                },
+              },
+            },
+            responses: { '201': { description: 'Created' } },
+          },
+        },
+      },
+      components: {
+        schemas: {
+          ItemRequest: {
+            type: 'object',
+            properties: {
+              name: { type: 'string' },
+              value: { type: 'integer' },
+              tag: { type: 'string' },
+            },
+            required: componentRequired,
+          },
+        },
+      },
+    };
+  }
+
+  async function bundleSpec(spec: object): Promise<string> {
+    const dir = fs.mkdtempSync(
+      path.join(os.tmpdir(), 'bundler-required-perm-')
+    );
+    fs.writeFileSync(
+      path.join(dir, 'rest-api.yaml'),
+      JSON.stringify(spec, null, 2),
+      'utf8'
+    );
+    const r = await bundle({ specDir: dir });
+    return JSON.stringify(r.spec);
+  }
+
+  it('dedups inline schema to its component even when `required` order differs', async () => {
+    // Inline has [tag, name, value]; component has [name, value, tag].
+    // With normalization running BEFORE Step 3 signature matching, both
+    // canonicalize to the same signature and the inline dedups to a $ref.
+    const dir = fs.mkdtempSync(
+      path.join(os.tmpdir(), 'bundler-required-dedup-')
+    );
+    fs.writeFileSync(
+      path.join(dir, 'rest-api.yaml'),
+      JSON.stringify(
+        makeSpec(['tag', 'name', 'value'], ['name', 'value', 'tag']),
+        null,
+        2
+      ),
+      'utf8'
+    );
+
+    const result = await bundle({ specDir: dir });
+    const bundledSpec = result.spec as {
+      paths: Record<
+        string,
+        Record<
+          string,
+          {
+            requestBody?: {
+              content?: {
+                'application/json'?: { schema?: { $ref?: string } };
+              };
+            };
+          }
+        >
+      >;
+    };
+
+    const ref =
+      bundledSpec.paths['/items']?.post?.requestBody?.content?.[
+        'application/json'
+      ]?.schema?.$ref;
+    expect(ref).toBe('#/components/schemas/ItemRequest');
+  });
+
+  it('two upstreams differing only in `required` order produce identical bundles', async () => {
+    // Three distinct permutations of the same set should all produce
+    // byte-identical bundled JSON.
+    const a = await bundleSpec(
+      makeSpec(['name', 'value', 'tag'], ['name', 'value', 'tag'])
+    );
+    const b = await bundleSpec(
+      makeSpec(['tag', 'name', 'value'], ['value', 'tag', 'name'])
+    );
+    const c = await bundleSpec(
+      makeSpec(['value', 'name', 'tag'], ['tag', 'name', 'value'])
+    );
+    expect(a).toEqual(b);
+    expect(b).toEqual(c);
+  });
+});
