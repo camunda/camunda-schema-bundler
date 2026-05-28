@@ -1,3 +1,10 @@
+## [2.4.2](https://github.com/camunda/camunda-schema-bundler/compare/v2.4.1...v2.4.2) (2026-05-28)
+
+
+### Bug Fixes
+
+* sort required arrays in bundled spec for deterministic output ([f2d9f76](https://github.com/camunda/camunda-schema-bundler/commit/f2d9f76deabf7253e7fb10f147eb360bda9925dd)), closes [#35](https://github.com/camunda/camunda-schema-bundler/issues/35)
+
 ## [2.4.1](https://github.com/camunda/camunda-schema-bundler/compare/v2.4.0...v2.4.1) (2026-05-07)
 
 
