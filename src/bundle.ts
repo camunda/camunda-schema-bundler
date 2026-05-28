@@ -20,6 +20,7 @@ import {
   canonicalStringify,
   structuralStringify,
   findPathLocalLikeRefs,
+  sortRequiredArrays,
 } from './helpers.js';
 import type { BundleOptions, BundleResult, BundleStats } from './types.js';
 import { extractMetadata } from './metadata.js';
@@ -832,6 +833,22 @@ export async function bundle(options: BundleOptions): Promise<BundleResult> {
     return methodA.localeCompare(methodB);
   });
   const sortedEndpointMap: Record<string, string> = Object.fromEntries(sortedEntries);
+
+  // ── Step 2b: Normalize unordered-set fields for deterministic signatures ──
+  //
+  // JSON Schema treats `required` as a set, but upstream serializers (the
+  // Java/Jackson pipeline behind camunda/camunda) emit it from unordered
+  // collections, so the array order flips between otherwise-identical runs.
+  //
+  // This MUST run before any signature computation (Step 3 onwards uses
+  // `canonicalStringify` / `structuralStringify`, both of which sort object
+  // keys but preserve array order). Two schemas that differ only in
+  // `required` order would otherwise produce different signatures, causing
+  // dedup/ambiguity decisions to flip between runs even when no schema
+  // content has actually changed. Normalizing here also guarantees the
+  // bundled output and the derived metadata are byte-stable for
+  // byte-identical input — see camunda/camunda-schema-bundler#35.
+  sortRequiredArrays(bundled);
 
   // ── Step 3: Normalize path-local $refs via signature matching ─────────────
 

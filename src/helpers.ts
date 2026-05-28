@@ -192,6 +192,44 @@ export function structuralStringify(obj: unknown): string {
 }
 
 /**
+ * Deterministically sort every JSON Schema `required` array in-place.
+ *
+ * JSON Schema treats `required` as a set, so the order of elements has no
+ * semantic meaning. Upstream OpenAPI generators (e.g. the Java/Jackson
+ * pipeline that produces the camunda/camunda spec) serialize from unordered
+ * collections, so the array order flips between otherwise-identical runs.
+ *
+ * Left unsorted, the bundled output oscillates on every regeneration even
+ * when no schema content has actually changed, which causes perpetual,
+ * content-free git merge conflicts in every downstream SDK repository that
+ * commits the bundled spec (see camunda/camunda-schema-bundler#35).
+ *
+ * Sorting is semantically a no-op for `required` and gives a stable,
+ * diffable output. We deliberately only normalize `required`: arrays like
+ * `enum` are technically ordered, and reordering them could change
+ * code-generator output (e.g. the first enum value used as a default).
+ */
+export function sortRequiredArrays(root: unknown): void {
+  const stack: unknown[] = [root];
+  const seen = new Set<unknown>();
+  while (stack.length) {
+    const cur = stack.pop();
+    if (!cur || typeof cur !== 'object' || seen.has(cur)) continue;
+    seen.add(cur);
+    if (Array.isArray(cur)) {
+      for (const item of cur) stack.push(item);
+      continue;
+    }
+    const obj = cur as Record<string, unknown>;
+    const req = obj['required'];
+    if (Array.isArray(req) && req.every((x) => typeof x === 'string')) {
+      (req as string[]).sort();
+    }
+    for (const v of Object.values(obj)) stack.push(v);
+  }
+}
+
+/**
  * Count path-local $like refs in the bundled spec (should be 0 after normalization).
  */
 export function findPathLocalLikeRefs(root: unknown): number {
