@@ -707,8 +707,8 @@ describe('extractMetadata: $ref resolution edge cases (PR #27 review)', () => {
 });
 
 describe('extractMetadata: non-string semantic keys are excluded', () => {
-  // Semantic keys are modelled by the SDKs as branded *strings* (CamundaKey<T>
-  // is a string brand). A schema tagged with `x-semantic-type` whose resolved
+  // Semantic keys are modelled by the SDKs as branded *strings* (CamundaKey<T> is
+  // a string brand). A schema tagged with `x-semantic-type` whose resolved
   // type is `integer`/`number` (e.g. the client-minted `IterationId`) is NOT a
   // string key and must not be classified as one — otherwise the downstream
   // generators emit string-typed brand helpers over a numeric alias, producing
