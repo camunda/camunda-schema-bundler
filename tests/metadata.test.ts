@@ -705,3 +705,80 @@ describe('extractMetadata: $ref resolution edge cases (PR #27 review)', () => {
     expect(xList).toEqual(['one', 'two']);
   });
 });
+
+describe('extractMetadata: non-string semantic keys are excluded', () => {
+  // Semantic keys are modelled by the SDKs as branded *strings* (CamundaKey<T>
+  // is a string brand). A schema tagged with `x-semantic-type` whose resolved
+  // type is `integer`/`number` (e.g. the client-minted `IterationId`) is NOT a
+  // string key and must not be classified as one — otherwise the downstream
+  // generators emit string-typed brand helpers over a numeric alias, producing
+  // a type error (camunda/orchestration-cluster-api-js generation TS2322).
+  const schemas: Record<string, unknown> = {
+    LongKey: {
+      type: 'string',
+      pattern: '^-?[0-9]+$',
+      minLength: 1,
+      maxLength: 25,
+    },
+    // String key via allOf/LongKey — must be kept.
+    ProcessInstanceKey: {
+      'x-semantic-type': 'ProcessInstanceKey',
+      allOf: [{ $ref: '#/components/schemas/LongKey' }],
+    },
+    // String key via top-level `type: string` — must be kept.
+    GroupId: {
+      type: 'string',
+      pattern: '^[a-zA-Z0-9]+$',
+      'x-semantic-type': 'GroupId',
+    },
+    // Integer-typed semantic key — must be excluded.
+    IterationId: {
+      type: 'integer',
+      format: 'int32',
+      minimum: 1,
+      'x-semantic-type': 'IterationId',
+      'x-semantic-client-minted': true,
+      example: 1,
+    },
+    // Number-typed semantic key — must be excluded.
+    SomeNumberKey: {
+      type: 'number',
+      'x-semantic-type': 'SomeNumberKey',
+    },
+    // Boolean-typed semantic key — must be excluded.
+    SomeBooleanKey: {
+      type: 'boolean',
+      'x-semantic-key': true,
+    },
+  };
+
+  const metadata = extractMetadata(
+    { components: { schemas }, paths: {} },
+    schemas,
+    'sha256:test'
+  );
+
+  it('excludes the integer-typed IterationId key', () => {
+    expect(
+      metadata.semanticKeys.find((k) => k.name === 'IterationId')
+    ).toBeUndefined();
+  });
+
+  it('keeps string-typed semantic keys (allOf/LongKey and top-level string)', () => {
+    const names = metadata.semanticKeys.map((k) => k.name);
+    expect(names).toContain('ProcessInstanceKey');
+    expect(names).toContain('GroupId');
+  });
+
+  it('excludes every non-string-typed semantic key (defect class guard)', () => {
+    // No extracted semantic key may resolve to a non-string scalar type.
+    for (const name of ['IterationId', 'SomeNumberKey', 'SomeBooleanKey']) {
+      expect(
+        metadata.semanticKeys.find((k) => k.name === name),
+        `${name} must not be classified as a string semantic key`
+      ).toBeUndefined();
+    }
+    expect(metadata.semanticKeys).toHaveLength(2);
+    expect(metadata.integrity.totalSemanticKeys).toBe(2);
+  });
+});
