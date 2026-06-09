@@ -1,3 +1,12 @@
+## [2.4.3](https://github.com/camunda/camunda-schema-bundler/compare/v2.4.2...v2.4.3) (2026-06-09)
+
+
+### Bug Fixes
+
+* comment formatting ([b74c5f6](https://github.com/camunda/camunda-schema-bundler/commit/b74c5f6aae9d1f598dad0b54d7a2fce7920072c5))
+* exclude non-string-typed schemas from semantic-key classification ([8fa97b8](https://github.com/camunda/camunda-schema-bundler/commit/8fa97b807ef9d7fa36f8cca6b8b5d151bf551133))
+* exclude non-string-typed schemas from semantic-key classification ([6411a7d](https://github.com/camunda/camunda-schema-bundler/commit/6411a7d1efdda51cf0252e9ff38a34ad8a68e031))
+
 ## [2.4.2](https://github.com/camunda/camunda-schema-bundler/compare/v2.4.1...v2.4.2) (2026-05-28)
 
 
