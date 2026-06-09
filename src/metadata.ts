@@ -91,6 +91,39 @@ function mergeConstraints(
   }
 }
 
+/**
+ * Resolve the effective scalar `type` of a (possibly `allOf`-composed) schema,
+ * following a `$ref` to `LongKey` (which is `type: string`). Returns the
+ * discovered scalar type, or `undefined` when no explicit type is present.
+ *
+ * Used to gate semantic-key classification: SDKs model semantic keys as branded
+ * strings (`CamundaKey<T>`), so a schema tagged with `x-semantic-type`/
+ * `x-semantic-key` whose resolved type is non-string (e.g. the client-minted
+ * `IterationId`, `type: integer`) must not be treated as a string key.
+ */
+function resolveScalarType(
+  schema: Record<string, unknown>,
+  schemas: Record<string, unknown>
+): string | undefined {
+  if (typeof schema['type'] === 'string') return schema['type'] as string;
+
+  if (Array.isArray(schema['allOf'])) {
+    for (const part of schema['allOf'] as Record<string, unknown>[]) {
+      if (typeof part['type'] === 'string') return part['type'] as string;
+      const ref = part['$ref'];
+      if (typeof ref === 'string') {
+        const refName = ref.split('/').pop();
+        const target =
+          refName && (schemas[refName] as Record<string, unknown> | undefined);
+        if (target && typeof target['type'] === 'string')
+          return target['type'] as string;
+      }
+    }
+  }
+
+  return undefined;
+}
+
 function extractSemanticKeys(
   schemas: Record<string, unknown>
 ): SemanticKeyEntry[] {
@@ -111,6 +144,15 @@ function extractSemanticKeys(
     const semanticKey =
       schema['x-semantic-key'] === true || !!schema['x-semantic-type'];
     if (!semanticKey) continue;
+
+    // Semantic keys are modelled by the SDKs as branded *strings*
+    // (CamundaKey<T>). A schema tagged with x-semantic-type/x-semantic-key
+    // whose resolved type is a non-string scalar (e.g. the client-minted
+    // `IterationId`, type: integer) is not a string key and must be left as a
+    // plain numeric/boolean type — otherwise the generators emit string-typed
+    // brand helpers over a numeric alias, producing a type error downstream.
+    const resolvedType = resolveScalarType(schema, schemas);
+    if (resolvedType && resolvedType !== 'string') continue;
 
     let includesLongKeyRef = false;
     const constraints: SchemaConstraints = {};
