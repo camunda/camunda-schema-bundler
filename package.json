@@ -1,6 +1,6 @@
 {
   "name": "camunda-schema-bundler",
-  "version": "2.4.3",
+  "version": "2.4.4",
   "description": "Bundle the Camunda multi-file OpenAPI spec into a single JSON file with schema normalization and metadata extraction",
   "type": "module",
   "main": "dist/index.js",

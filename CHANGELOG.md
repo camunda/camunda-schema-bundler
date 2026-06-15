@@ -1,3 +1,10 @@
+## [2.4.4](https://github.com/camunda/camunda-schema-bundler/compare/v2.4.3...v2.4.4) (2026-06-15)
+
+
+### Bug Fixes
+
+* resolve path-local sort/items $refs shared between alias schemas ([c264862](https://github.com/camunda/camunda-schema-bundler/commit/c26486270469ac5652407d60458d15e44f356513))
+
 ## [2.4.3](https://github.com/camunda/camunda-schema-bundler/compare/v2.4.2...v2.4.3) (2026-06-09)
 
 
