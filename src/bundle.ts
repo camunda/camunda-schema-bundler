@@ -387,6 +387,36 @@ function freshSignatureDedup(
     // Recurse first (post-order)
     for (const [k, v] of Object.entries(obj)) walk(v, `${jsonPath}.${k}`);
 
+    // Resolve surviving path-local $refs (e.g. `sort/items` shared between two
+    // structurally-identical alias schemas) to their intended component using
+    // the original-ref context recorded from the source YAML.
+    //
+    // Step-3 signature normalization can't recover these: `SwaggerParser`
+    // dedupes the shared subtree into a path-local $ref, and the
+    // snapshot-resolved inline has its own nested refs (e.g. `order` ->
+    // `SortOrderEnum`) inlined, so its exact signature matches NO component.
+    // Without `--deref-path-local` the ref then survives un-rewritten and
+    // dangling (its JSON pointer walks through a `$ref` node), which makes
+    // generators emit a bare `Object`. See camunda/camunda-schema-bundler#32.
+    if (
+      typeof obj['$ref'] === 'string' &&
+      (obj['$ref'] as string).startsWith('#/paths/')
+    ) {
+      const name =
+        originalRefByJsonPath.get(jsonPath) ??
+        lookupNestedOriginalRef(
+          jsonPath,
+          originalRefByJsonPath,
+          componentInternalRefs
+        );
+      if (name && schemas[name]) {
+        for (const k of Object.keys(obj)) delete obj[k];
+        obj['$ref'] = `#/components/schemas/${name}`;
+        replaced++;
+      }
+      return;
+    }
+
     if (obj['$ref']) return;
 
     const isSchemaLike =
