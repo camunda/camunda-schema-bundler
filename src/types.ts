@@ -150,6 +150,7 @@ export interface BundleStats {
   freshDedupCount: number;
   ambiguousInlineCount: number;
   dereferencedPathLocalRefCount: number;
+  inlinedParamResponseRefCount: number;
   pathLocalLikeRefCount: number;
 
   /**
