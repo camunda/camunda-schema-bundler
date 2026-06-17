@@ -730,6 +730,7 @@ export async function bundle(options: BundleOptions): Promise<BundleResult> {
     freshDedupCount: 0,
     ambiguousInlineCount: 0,
     dereferencedPathLocalRefCount: 0,
+    inlinedParamResponseRefCount: 0,
     pathLocalLikeRefCount: 0,
   };
 
@@ -1008,9 +1009,88 @@ export async function bundle(options: BundleOptions): Promise<BundleResult> {
   // have normalized $like refs and promoted ExactMatch $refs.
   const postNormSnapshot = JSON.parse(JSON.stringify(bundled));
 
-  // ── Step 3c: Fresh dedup pass (runs after deref, see Step 4b) ──────────────
+  // ── Step 3c: Inline dangling path-local parameter & response $refs ─────────
+  //
+  // `SwaggerParser.bundle()` strips the `components.parameters` and
+  // `components.responses` sections: it inlines the FIRST usage of a shared
+  // parameter/response under `paths` and rewrites every OTHER usage to a
+  // path-local `$ref` (e.g. `#/paths/~1files~1{fileKey}/get/parameters/0`,
+  // `#/paths/~1info/get/responses/401`).
+  //
+  // Schema refs are recovered by Step 3, which rewrites them to
+  // `#/components/schemas/...` because that section survives. Parameters and
+  // responses have NO surviving component section to point at, so the
+  // path-local ref is the only form left. Consumers that resolve only
+  // `#/components/...` pointers (e.g. the api-test-generator
+  // semantic-graph-extractor) cannot follow a `#/paths/...` pointer and
+  // silently drop the parameter/response — so an operation that shared a path
+  // key parameter loses it entirely.
+  //
+  // Resolve each such ref by inlining a deep copy of its target. This is
+  // always-on, independent of `dereferencePathLocalRefs` (which inlines ALL
+  // path-local refs — including schemas — and so defeats component dedup). It
+  // is scoped to refs whose pointer terminates at a `parameters/<idx>` or
+  // `responses/<status>` node, which are never schema refs, so schema dedup is
+  // untouched.
+  const PARAM_REF_RE = /\/parameters\/\d+$/;
+  const RESPONSE_REF_RE = /\/responses\/[^/]+$/;
+  function inlineParamAndResponseRef(value: unknown): unknown {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+      return undefined;
+    }
+    const ref = (value as Record<string, unknown>)['$ref'];
+    if (typeof ref !== 'string') return undefined;
+    const normalized = normalizeInternalRef(ref);
+    if (!normalized.startsWith('#/paths/')) return undefined;
+    if (!PARAM_REF_RE.test(normalized) && !RESPONSE_REF_RE.test(normalized)) {
+      return undefined;
+    }
+    const resolved =
+      resolveInternalRef(
+        postNormSnapshot as Record<string, unknown>,
+        normalized
+      ) ??
+      resolveInternalRef(preNormSnapshot as Record<string, unknown>, normalized);
+    if (!resolved || typeof resolved !== 'object') {
+      // No silent failure: a path-local parameter/response ref that cannot be
+      // resolved would otherwise reach downstream consumers as a dropped field.
+      throw new Error(
+        `Unable to resolve path-local parameter/response $ref '${ref}'. ` +
+          `The bundled spec would carry a dangling pointer that downstream ` +
+          `generators silently drop.`
+      );
+    }
+    stats.inlinedParamResponseRefCount += 1;
+    return JSON.parse(JSON.stringify(resolved));
+  }
+  {
+    const seen = new Set<unknown>();
+    const stack: unknown[] = [bundled];
+    while (stack.length) {
+      const node = stack.pop();
+      if (!node || typeof node !== 'object' || seen.has(node)) continue;
+      seen.add(node);
+      if (Array.isArray(node)) {
+        for (let i = 0; i < node.length; i++) {
+          const inlined = inlineParamAndResponseRef(node[i]);
+          if (inlined !== undefined) node[i] = inlined;
+          stack.push(node[i]);
+        }
+      } else {
+        const obj = node as Record<string, unknown>;
+        for (const key of Object.keys(obj)) {
+          const inlined = inlineParamAndResponseRef(obj[key]);
+          if (inlined !== undefined) obj[key] = inlined;
+          stack.push(obj[key]);
+        }
+      }
+    }
+  }
 
   // ── Step 4: Optionally dereference remaining path-local $refs ─────────────
+  //
+  // (The fresh signature dedup pass runs later as Step 4b, after this
+  // optional dereferencing — it has no Step 3 counterpart.)
 
   if (options.dereferencePathLocalRefs) {
     for (let pass = 1; pass <= 20; pass++) {

@@ -283,6 +283,12 @@ async function main(): Promise<void> {
     );
   }
 
+  if (result.stats.inlinedParamResponseRefCount > 0) {
+    console.log(
+      `[camunda-schema-bundler] Inlined ${result.stats.inlinedParamResponseRefCount} path-local parameter/response $refs`
+    );
+  }
+
   console.log(
     `[camunda-schema-bundler] Metadata: ` +
       `semanticKeys=${result.metadata.integrity.totalSemanticKeys}, ` +

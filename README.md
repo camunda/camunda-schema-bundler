@@ -139,7 +139,8 @@ console.log(result.stats);
 // {
 //   pathCount: 140, schemaCount: 511, augmentedSchemaCount: 511,
 //   promotedInlineSchemaCount: 46, freshDedupCount: 298,
-//   dereferencedPathLocalRefCount: 0, pathLocalLikeRefCount: 0
+//   dereferencedPathLocalRefCount: 0, inlinedParamResponseRefCount: 0,
+//   pathLocalLikeRefCount: 0
 // }
 
 console.log(result.endpointMap);
