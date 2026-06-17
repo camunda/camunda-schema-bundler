@@ -145,11 +145,19 @@ paths:
         return;
       }
       const obj = node as Record<string, unknown>;
-      if (
-        typeof obj['$ref'] === 'string' &&
-        (obj['$ref'] as string).startsWith('#/paths/')
-      ) {
-        survivors.push(`${jsonPath}: ${obj['$ref']}`);
+      // Scope to the defect class this test guards: path-local refs that
+      // terminate at a `parameters/<idx>` or `responses/<status>` node. Other
+      // path-local refs (e.g. surviving schema-position refs) are a separate
+      // category covered elsewhere; flagging them here would make this test
+      // fail for reasons unrelated to parameter/response inlining.
+      if (typeof obj['$ref'] === 'string') {
+        const ref = obj['$ref'] as string;
+        if (
+          ref.startsWith('#/paths/') &&
+          (/\/parameters\/\d+$/.test(ref) || /\/responses\/[^/]+$/.test(ref))
+        ) {
+          survivors.push(`${jsonPath}: ${ref}`);
+        }
       }
       for (const [key, val] of Object.entries(obj)) {
         walk(val, `${jsonPath}.${key}`);

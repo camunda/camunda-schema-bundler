@@ -1087,9 +1087,10 @@ export async function bundle(options: BundleOptions): Promise<BundleResult> {
     }
   }
 
-  // ── Step 3d: Fresh dedup pass (runs after deref, see Step 4b) ──────────────
-
   // ── Step 4: Optionally dereference remaining path-local $refs ─────────────
+  //
+  // (The fresh signature dedup pass runs later as Step 4b, after this
+  // optional dereferencing — it has no Step 3 counterpart.)
 
   if (options.dereferencePathLocalRefs) {
     for (let pass = 1; pass <= 20; pass++) {
