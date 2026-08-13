@@ -310,3 +310,68 @@ paths:
     );
   });
 });
+
+describe('path-local parameter $refs resolving to non-parameter objects', () => {
+  let specDir: string;
+
+  beforeAll(() => {
+    specDir = fs.mkdtempSync(path.join(os.tmpdir(), 'bundler-param-shape-'));
+
+    // `/b`'s parameter points at a response object. It is an object, so shape
+    // checks alone would inline it and destroy the $ref the survivor check
+    // relies on.
+    fs.writeFileSync(
+      path.join(specDir, 'rest-api.yaml'),
+      `openapi: '3.0.3'
+info:
+  title: Test API
+  version: '1.0.0'
+paths:
+  /a:
+    get:
+      operationId: opA
+      parameters:
+        - name: alpha
+          in: query
+          required: false
+          schema:
+            type: string
+      responses:
+        '200':
+          description: OK
+  /b:
+    get:
+      operationId: opB
+      parameters:
+        - $ref: '#/paths/~1a/get/responses/200'
+      responses:
+        '200':
+          description: OK
+`,
+      'utf8'
+    );
+  });
+
+  it('throws rather than inlining an object that is not a parameter', async () => {
+    await expect(bundle({ specDir })).rejects.toThrow(
+      /survived inside parameters arrays/
+    );
+  });
+
+  it('leaves the $ref in place when bypassed', async () => {
+    const result = await bundle({
+      specDir,
+      allowPathLocalParameterRefs: true,
+    });
+    const paths = (result.spec as Record<string, unknown>)['paths'] as Record<
+      string,
+      Record<string, unknown>
+    >;
+    const params = (paths['/b']['get'] as Record<string, unknown>)[
+      'parameters'
+    ] as Record<string, unknown>[];
+
+    expect(params[0]['$ref']).toBe('#/paths/~1a/get/responses/200');
+    expect(result.stats.inlinedPathLocalParameterCount).toBe(0);
+  });
+});

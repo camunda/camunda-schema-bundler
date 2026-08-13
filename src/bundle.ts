@@ -1045,6 +1045,14 @@ export async function bundle(options: BundleOptions): Promise<BundleResult> {
       return typeof ref === 'string' && ref.startsWith('#/paths/');
     };
 
+    // `name` + `in` are the required members of a Parameter Object, and the
+    // cheapest way to tell one from any other object a bad pointer may land on.
+    const isParameterObject = (node: unknown): boolean => {
+      if (!node || typeof node !== 'object' || Array.isArray(node)) return false;
+      const p = node as Record<string, unknown>;
+      return typeof p['name'] === 'string' && typeof p['in'] === 'string';
+    };
+
     for (let pass = 1; pass <= 20; pass++) {
       let inlined = 0;
       forEachParameterArray(bundled, (params) => {
@@ -1058,16 +1066,11 @@ export async function bundle(options: BundleOptions): Promise<BundleResult> {
           const resolved =
             resolveInternalRef(postNormSnapshot as Record<string, unknown>, ref) ??
             resolveInternalRef(preNormSnapshot as Record<string, unknown>, ref);
-          // A pointer that resolves to a non-object cannot be a parameter, and
-          // one that resolves to another path-local ref (a cycle) can never
-          // make progress. Leave the $ref in place so the Step 5 guard reports
-          // it, and do not count it as inlined.
-          if (
-            resolved &&
-            typeof resolved === 'object' &&
-            !Array.isArray(resolved) &&
-            !isPathLocalRef(resolved)
-          ) {
+          // Only substitute something that is actually a parameter. Anything
+          // else — a primitive, a response object, or another path-local ref
+          // (a cycle, which could never make progress anyway) — leaves the
+          // $ref in place so the Step 5 guard reports it, uncounted.
+          if (isParameterObject(resolved)) {
             params[i] = JSON.parse(JSON.stringify(resolved));
             inlined++;
           }
