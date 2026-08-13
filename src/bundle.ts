@@ -1039,36 +1039,34 @@ export async function bundle(options: BundleOptions): Promise<BundleResult> {
   // `--deref-path-local`: opting in per-consumer only hid the bug in the one
   // SDK that happened to pass the flag.
   {
+    const isPathLocalRef = (node: unknown): boolean => {
+      if (!node || typeof node !== 'object' || Array.isArray(node)) return false;
+      const ref = (node as Record<string, unknown>)['$ref'];
+      return typeof ref === 'string' && ref.startsWith('#/paths/');
+    };
+
     for (let pass = 1; pass <= 20; pass++) {
       let inlined = 0;
       forEachParameterArray(bundled, (params) => {
         for (let i = 0; i < params.length; i++) {
-          const param = params[i] as Record<string, unknown> | null;
-          if (
-            !param ||
-            typeof param !== 'object' ||
-            typeof param['$ref'] !== 'string' ||
-            !(param['$ref'] as string).startsWith('#/paths/')
-          )
-            continue;
+          const param = params[i];
+          if (!isPathLocalRef(param)) continue;
+          const ref = (param as Record<string, unknown>)['$ref'] as string;
           // Prefer the post-normalization source (normalized $like refs,
           // promoted schemas); fall back to pre-normalization if the path was
           // removed during normalization.
           const resolved =
-            resolveInternalRef(
-              postNormSnapshot as Record<string, unknown>,
-              param['$ref'] as string
-            ) ??
-            resolveInternalRef(
-              preNormSnapshot as Record<string, unknown>,
-              param['$ref'] as string
-            );
-          // A pointer that resolves to a non-object cannot be a parameter.
-          // Leave the $ref in place so the Step 5 guard reports it.
+            resolveInternalRef(postNormSnapshot as Record<string, unknown>, ref) ??
+            resolveInternalRef(preNormSnapshot as Record<string, unknown>, ref);
+          // A pointer that resolves to a non-object cannot be a parameter, and
+          // one that resolves to another path-local ref (a cycle) can never
+          // make progress. Leave the $ref in place so the Step 5 guard reports
+          // it, and do not count it as inlined.
           if (
             resolved &&
             typeof resolved === 'object' &&
-            !Array.isArray(resolved)
+            !Array.isArray(resolved) &&
+            !isPathLocalRef(resolved)
           ) {
             params[i] = JSON.parse(JSON.stringify(resolved));
             inlined++;

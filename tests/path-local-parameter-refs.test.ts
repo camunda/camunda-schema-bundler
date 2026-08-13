@@ -258,3 +258,55 @@ paths:
     expect(params[0]['$ref']).toBe('#/paths/~1a/get/parameters/0/name');
   });
 });
+
+describe('cyclic path-local $refs in parameters arrays', () => {
+  let specDir: string;
+
+  beforeAll(() => {
+    specDir = fs.mkdtempSync(path.join(os.tmpdir(), 'bundler-param-cycle-'));
+
+    // `/a` and `/b` point at each other, so every resolution yields another
+    // path-local ref and no substitution can ever make progress.
+    fs.writeFileSync(
+      path.join(specDir, 'rest-api.yaml'),
+      `openapi: '3.0.3'
+info:
+  title: Test API
+  version: '1.0.0'
+paths:
+  /a:
+    get:
+      operationId: opA
+      parameters:
+        - $ref: '#/paths/~1b/get/parameters/0'
+      responses:
+        '200':
+          description: OK
+  /b:
+    get:
+      operationId: opB
+      parameters:
+        - $ref: '#/paths/~1a/get/parameters/0'
+      responses:
+        '200':
+          description: OK
+`,
+      'utf8'
+    );
+  });
+
+  it('never counts a parameter it did not actually inline', async () => {
+    const result = await bundle({
+      specDir,
+      allowPathLocalParameterRefs: true,
+    });
+
+    expect(result.stats.inlinedPathLocalParameterCount).toBe(0);
+  });
+
+  it('leaves the unresolvable refs in place for the survivor check', async () => {
+    await expect(bundle({ specDir })).rejects.toThrow(
+      /survived inside parameters arrays/
+    );
+  });
+});
