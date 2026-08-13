@@ -20,6 +20,8 @@ import {
   canonicalStringify,
   structuralStringify,
   findPathLocalLikeRefs,
+  forEachParameterArray,
+  findPathLocalParameterRefs,
   sortRequiredArrays,
 } from './helpers.js';
 import type { BundleOptions, BundleResult, BundleStats } from './types.js';
@@ -731,6 +733,7 @@ export async function bundle(options: BundleOptions): Promise<BundleResult> {
     ambiguousInlineCount: 0,
     dereferencedPathLocalRefCount: 0,
     pathLocalLikeRefCount: 0,
+    inlinedPathLocalParameterCount: 0,
   };
 
   // ── Step 1: Bundle multi-file YAML into a single document ─────────────────
@@ -1010,6 +1013,68 @@ export async function bundle(options: BundleOptions): Promise<BundleResult> {
 
   // ── Step 3c: Fresh dedup pass (runs after deref, see Step 4b) ──────────────
 
+  // ── Step 3d: Always inline path-local $refs inside `parameters` arrays ────
+  //
+  // `SwaggerParser.bundle()` inlines `components.parameters` entirely (the
+  // section does not survive bundling), then dedupes the resulting identical
+  // parameter objects into path-local $refs pointing at whichever operation it
+  // emitted first:
+  //
+  //   PATCH /cluster/v2/mode:
+  //     parameters:
+  //       - $ref: '#/paths/~1mode/patch/parameters/0'
+  //
+  // Step-3 signature normalization cannot rescue these — it rewrites to
+  // `#/components/schemas/*`, and there is no surviving component to point at.
+  //
+  // openapi-generator (Java) cannot resolve the pointer, collapses every such
+  // ref to the same unresolved value, and aborts with "There are duplicate
+  // parameter values"; Microsoft.OpenApi fails similarly. That took out
+  // regeneration for the Rust and C# SDKs (camunda/camunda-schema-bundler#40).
+  //
+  // Unlike schemas, parameters are never emitted as named types by any
+  // generator, so inlining is lossless and there is nothing to preserve by
+  // keeping a ref. It is therefore done unconditionally rather than behind
+  // `--deref-path-local`: opting in per-consumer only hid the bug in the one
+  // SDK that happened to pass the flag.
+  {
+    for (let pass = 1; pass <= 20; pass++) {
+      let inlined = 0;
+      forEachParameterArray(bundled, (params) => {
+        for (let i = 0; i < params.length; i++) {
+          const param = params[i] as Record<string, unknown> | null;
+          if (
+            !param ||
+            typeof param !== 'object' ||
+            typeof param['$ref'] !== 'string' ||
+            !(param['$ref'] as string).startsWith('#/paths/')
+          )
+            continue;
+          // Prefer the post-normalization source (normalized $like refs,
+          // promoted schemas); fall back to pre-normalization if the path was
+          // removed during normalization.
+          const resolved =
+            resolveInternalRef(
+              postNormSnapshot as Record<string, unknown>,
+              param['$ref'] as string
+            ) ??
+            resolveInternalRef(
+              preNormSnapshot as Record<string, unknown>,
+              param['$ref'] as string
+            );
+          if (resolved) {
+            params[i] = JSON.parse(JSON.stringify(resolved));
+            inlined++;
+          }
+        }
+      });
+      stats.inlinedPathLocalParameterCount += inlined;
+      // A resolved parameter can itself carry a path-local $ref (a chain);
+      // iterate until convergence.
+      if (inlined === 0) break;
+    }
+  }
+
   // ── Step 4: Optionally dereference remaining path-local $refs ─────────────
 
   if (options.dereferencePathLocalRefs) {
@@ -1133,6 +1198,22 @@ export async function bundle(options: BundleOptions): Promise<BundleResult> {
     throw new Error(
       `${stats.pathLocalLikeRefCount} path-local $like ref(s) survived normalization. ` +
         `This will cause generator failures. Set allowPathLocalLikeRefs to bypass.`
+    );
+  }
+
+  // Step 3d should have inlined all of these. A survivor means the pointer
+  // could not be resolved, so the bundle is one no generator can consume —
+  // fail loudly rather than emit it.
+  const survivingParameterRefs = findPathLocalParameterRefs(bundled);
+  if (
+    survivingParameterRefs.length > 0 &&
+    !options.allowPathLocalParameterRefs
+  ) {
+    throw new Error(
+      `${survivingParameterRefs.length} path-local $ref(s) survived inside parameters arrays:\n` +
+        survivingParameterRefs.map((r) => `  ${r}`).join('\n') +
+        `\n\nThese cannot be resolved by openapi-generator or Microsoft.OpenApi and cause ` +
+        `"duplicate parameter values" failures. Set allowPathLocalParameterRefs to bypass.`
     );
   }
 

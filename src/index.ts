@@ -31,4 +31,6 @@ export {
   hashDirectoryTree,
   listFilesRecursive,
   findPathLocalLikeRefs,
+  findPathLocalParameterRefs,
+  forEachParameterArray,
 } from './helpers.js';

@@ -108,6 +108,7 @@ camunda-schema-bundler --version
 | `--output-semantic-kinds <path>` | Output path for the `semantic-kinds.json` registry. Verbatim copy from `<specDir>/semantic-kinds.json`; skipped if the source file is absent. See [#28](https://github.com/camunda/camunda-schema-bundler/issues/28). |
 | `--deref-path-local` | Inline remaining path-local `$ref`s (needed for Microsoft.OpenApi) |
 | `--allow-like-refs` | Don't fail on surviving path-local `$like` refs |
+| `--allow-param-refs` | Don't fail on surviving path-local `$ref`s inside `parameters` arrays |
 | **General** | |
 | `--help`, `-h` | Show help |
 | `--version`, `-v` | Show version |
@@ -191,6 +192,8 @@ import {
   hashDirectoryTree,     // SHA-256 hash of a directory for drift detection
   listFilesRecursive,    // List all files in a directory recursively
   findPathLocalLikeRefs, // Find surviving path-local $like refs in a spec
+  findPathLocalParameterRefs, // Find surviving path-local $refs in parameters arrays
+  forEachParameterArray, // Visit every path-item / operation `parameters` array
 } from 'camunda-schema-bundler';
 ```
 
@@ -208,9 +211,10 @@ import {
 5. **Promote** — Inline schemas that couldn't be matched to existing components are promoted to new named component schemas
 6. **Fresh dedup** — Iterative pass (up to 10 rounds until convergence) that deduplicates newly-promoted schemas against each other and existing components using signature matching, including resolution through intermediate `$ref` chains
 7. **Rewrite** — Decode URI-encoded internal refs (`%24like` → `$like`)
-8. **Validate** — Fail-fast if any path-local `$like` refs survive (configurable with `--allow-like-refs`)
-9. **Dereference** (optional, `--deref-path-local`) — Inline remaining path-local `$ref`s for strict generators
-10. **Extract metadata** — Build the intermediate representation (semantic keys, unions, operations, etc.)
+8. **Inline parameter refs** — Always inline path-local `$ref`s that survive inside `parameters` arrays. `SwaggerParser.bundle()` drops `components.parameters` entirely and dedupes the resulting identical parameter objects into `#/paths/...` refs, which step 4 cannot rewrite because there is no surviving component to point at. Generators cannot resolve them (openapi-generator aborts with "There are duplicate parameter values"), and parameters are never emitted as named types, so inlining is lossless. Fail-fast if any survive (configurable with `--allow-param-refs`)
+9. **Validate** — Fail-fast if any path-local `$like` refs survive (configurable with `--allow-like-refs`)
+10. **Dereference** (optional, `--deref-path-local`) — Inline remaining path-local `$ref`s for strict generators
+11. **Extract metadata** — Build the intermediate representation (semantic keys, unions, operations, etc.)
 
 ## Metadata IR
 
