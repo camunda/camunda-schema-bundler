@@ -1030,7 +1030,8 @@ export async function bundle(options: BundleOptions): Promise<BundleResult> {
   // openapi-generator (Java) cannot resolve the pointer, collapses every such
   // ref to the same unresolved value, and aborts with "There are duplicate
   // parameter values"; Microsoft.OpenApi fails similarly. That took out
-  // regeneration for the Rust and C# SDKs (camunda/camunda-schema-bundler#40).
+  // regeneration for the Rust SDK (camunda/camunda-schema-bundler#40). C# was
+  // unaffected only because it passes `--deref-path-local`, which masks it.
   //
   // Unlike schemas, parameters are never emitted as named types by any
   // generator, so inlining is lossless and there is nothing to preserve by
@@ -1062,7 +1063,13 @@ export async function bundle(options: BundleOptions): Promise<BundleResult> {
               preNormSnapshot as Record<string, unknown>,
               param['$ref'] as string
             );
-          if (resolved) {
+          // A pointer that resolves to a non-object cannot be a parameter.
+          // Leave the $ref in place so the Step 5 guard reports it.
+          if (
+            resolved &&
+            typeof resolved === 'object' &&
+            !Array.isArray(resolved)
+          ) {
             params[i] = JSON.parse(JSON.stringify(resolved));
             inlined++;
           }
@@ -1213,7 +1220,8 @@ export async function bundle(options: BundleOptions): Promise<BundleResult> {
       `${survivingParameterRefs.length} path-local $ref(s) survived inside parameters arrays:\n` +
         survivingParameterRefs.map((r) => `  ${r}`).join('\n') +
         `\n\nThese cannot be resolved by openapi-generator or Microsoft.OpenApi and cause ` +
-        `"duplicate parameter values" failures. Set allowPathLocalParameterRefs to bypass.`
+        `"duplicate parameter values" failures. Set allowPathLocalParameterRefs ` +
+        `(CLI: --allow-param-refs) to bypass.`
     );
   }
 

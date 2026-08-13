@@ -24,7 +24,8 @@ import { bundle } from '../src/bundle.js';
  * openapi-generator (Java) cannot resolve the pointers, collapses both to the
  * same unresolved value, and aborts the whole run with
  * "There are duplicate parameter values"; Microsoft.OpenApi fails similarly.
- * That took out regeneration for the Rust and C# SDKs.
+ * That took out regeneration for the Rust SDK. C# was unaffected only because
+ * it passes `--deref-path-local`, which masks it.
  *
  * Parameters are never emitted as named types by any generator, so inlining is
  * lossless — unlike schemas, there is nothing to preserve by keeping a ref.
@@ -191,5 +192,69 @@ paths:
     expect((params[0]['schema'] as Record<string, unknown>)['$ref']).toBe(
       '#/components/schemas/Mode'
     );
+  });
+});
+
+describe('unresolvable path-local $refs in parameters arrays', () => {
+  let specDir: string;
+
+  beforeAll(() => {
+    specDir = fs.mkdtempSync(path.join(os.tmpdir(), 'bundler-param-bad-ref-'));
+
+    // `/b`'s parameter points at a string, not a parameter object. Inlining it
+    // would swap a parameter for a primitive and defeat the survivor check.
+    fs.writeFileSync(
+      path.join(specDir, 'rest-api.yaml'),
+      `openapi: '3.0.3'
+info:
+  title: Test API
+  version: '1.0.0'
+paths:
+  /a:
+    get:
+      operationId: opA
+      parameters:
+        - name: alpha
+          in: query
+          required: false
+          schema:
+            type: string
+      responses:
+        '200':
+          description: OK
+  /b:
+    get:
+      operationId: opB
+      parameters:
+        - $ref: '#/paths/~1a/get/parameters/0/name'
+      responses:
+        '200':
+          description: OK
+`,
+      'utf8'
+    );
+  });
+
+  it('throws rather than inlining a non-object resolution', async () => {
+    await expect(bundle({ specDir })).rejects.toThrow(
+      /survived inside parameters arrays/
+    );
+  });
+
+  it('can be bypassed with allowPathLocalParameterRefs', async () => {
+    const result = await bundle({
+      specDir,
+      allowPathLocalParameterRefs: true,
+    });
+    const paths = (result.spec as Record<string, unknown>)['paths'] as Record<
+      string,
+      Record<string, unknown>
+    >;
+    const params = (paths['/b']['get'] as Record<string, unknown>)[
+      'parameters'
+    ] as Record<string, unknown>[];
+
+    // Left untouched — not replaced by the string it pointed at.
+    expect(params[0]['$ref']).toBe('#/paths/~1a/get/parameters/0/name');
   });
 });
