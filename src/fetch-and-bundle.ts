@@ -37,6 +37,7 @@ export async function fetchAndBundle(
     manualOverrides: options.manualOverrides,
     dereferencePathLocalRefs: options.dereferencePathLocalRefs,
     allowPathLocalLikeRefs: options.allowPathLocalLikeRefs,
+    allowPathLocalParameterRefs: options.allowPathLocalParameterRefs,
     allowAmbiguousInlines: options.allowAmbiguousInlines,
   });
 }
