@@ -230,6 +230,67 @@ export function sortRequiredArrays(root: unknown): void {
 }
 
 /**
+ * Visit every `parameters` array reachable under `paths`, at both the
+ * path-item level (`paths./foo.parameters`) and the operation level
+ * (`paths./foo.get.parameters`).
+ *
+ * Path items nested elsewhere — `webhooks`, `components.pathItems`, and
+ * operation `callbacks` — are not traversed. The bundled Camunda spec has
+ * none; broaden this (and its callers) if that changes.
+ *
+ * The callback receives the array itself (mutable in place) and a
+ * human-readable location for diagnostics.
+ */
+export function forEachParameterArray(
+  root: Record<string, unknown>,
+  visit: (params: unknown[], where: string) => void
+): void {
+  const paths = root['paths'];
+  if (!paths || typeof paths !== 'object') return;
+  for (const [apiPath, itemRaw] of Object.entries(
+    paths as Record<string, unknown>
+  )) {
+    if (!itemRaw || typeof itemRaw !== 'object') continue;
+    for (const [key, valueRaw] of Object.entries(
+      itemRaw as Record<string, unknown>
+    )) {
+      if (key === 'parameters') {
+        if (Array.isArray(valueRaw)) visit(valueRaw, apiPath);
+        continue;
+      }
+      if (!valueRaw || typeof valueRaw !== 'object' || Array.isArray(valueRaw))
+        continue;
+      const params = (valueRaw as Record<string, unknown>)['parameters'];
+      if (Array.isArray(params))
+        visit(params, `${key.toUpperCase()} ${apiPath}`);
+    }
+  }
+}
+
+/**
+ * Collect surviving path-local `$refs` inside `parameters` arrays, within the
+ * traversal scope of {@link forEachParameterArray}.
+ *
+ * Should be empty after the inlining pass in `bundle()` (Step 3d); a non-empty
+ * result means a ref could not be resolved, which produces a spec no generator
+ * can consume.
+ */
+export function findPathLocalParameterRefs(
+  root: Record<string, unknown>
+): string[] {
+  const found: string[] = [];
+  forEachParameterArray(root, (params, where) => {
+    for (const param of params) {
+      if (!param || typeof param !== 'object') continue;
+      const ref = (param as Record<string, unknown>)['$ref'];
+      if (typeof ref === 'string' && ref.startsWith('#/paths/'))
+        found.push(`${where} -> ${ref}`);
+    }
+  });
+  return found;
+}
+
+/**
  * Count path-local $like refs in the bundled spec (should be 0 after normalization).
  */
 export function findPathLocalLikeRefs(root: unknown): number {

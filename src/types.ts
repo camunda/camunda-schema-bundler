@@ -53,6 +53,9 @@ export interface FetchAndBundleOptions {
   /** If true, allow surviving path-local $like refs. */
   allowPathLocalLikeRefs?: boolean;
 
+  /** If true, allow surviving path-local $refs inside `parameters` arrays. */
+  allowPathLocalParameterRefs?: boolean;
+
   /** If true, allow ambiguous inline schemas that match multiple component schemas. */
   allowAmbiguousInlines?: boolean;
 
@@ -111,6 +114,12 @@ export interface BundleOptions {
   allowPathLocalLikeRefs?: boolean;
 
   /**
+   * If true, allow surviving path-local $refs inside `parameters` arrays
+   * without failing. Default: false (fail-fast).
+   */
+  allowPathLocalParameterRefs?: boolean;
+
+  /**
    * If true, allow ambiguous inline schemas that match multiple component
    * schemas without failing. Default: false (fail-fast).
    */
@@ -151,6 +160,8 @@ export interface BundleStats {
   ambiguousInlineCount: number;
   dereferencedPathLocalRefCount: number;
   pathLocalLikeRefCount: number;
+  /** Path-local `$refs` inlined inside `parameters` arrays (always applied). */
+  inlinedPathLocalParameterCount: number;
 
   /**
    * `true` when the caller requested `outputEndpointMap` (or `--output-endpoint-map`).
