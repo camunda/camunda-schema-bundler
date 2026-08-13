@@ -230,10 +230,14 @@ export function sortRequiredArrays(root: unknown): void {
 }
 
 /**
- * Visit every OpenAPI `parameters` array in the document.
+ * Visit every `parameters` array reachable under `paths`, at both the
+ * path-item level (`paths./foo.parameters`) and the operation level
+ * (`paths./foo.get.parameters`).
  *
- * Covers both the path-item level (`paths./foo.parameters`) and the operation
- * level (`paths./foo.get.parameters`), which is where OpenAPI allows them.
+ * Path items nested elsewhere — `webhooks`, `components.pathItems`, and
+ * operation `callbacks` — are not traversed. The bundled Camunda spec has
+ * none; broaden this (and its callers) if that changes.
+ *
  * The callback receives the array itself (mutable in place) and a
  * human-readable location for diagnostics.
  */
@@ -264,11 +268,12 @@ export function forEachParameterArray(
 }
 
 /**
- * Collect surviving path-local `$refs` inside `parameters` arrays.
+ * Collect surviving path-local `$refs` inside `parameters` arrays, within the
+ * traversal scope of {@link forEachParameterArray}.
  *
- * Should be empty after `inlinePathLocalParameterRefs`; a non-empty result
- * means a ref could not be resolved, which produces a spec no generator can
- * consume.
+ * Should be empty after the inlining pass in `bundle()` (Step 3d); a non-empty
+ * result means a ref could not be resolved, which produces a spec no generator
+ * can consume.
  */
 export function findPathLocalParameterRefs(
   root: Record<string, unknown>
