@@ -1,3 +1,11 @@
+## [2.4.5](https://github.com/camunda/camunda-schema-bundler/compare/v2.4.4...v2.4.5) (2026-08-13)
+
+
+### Bug Fixes
+
+* inline path-local $refs in parameters arrays ([d766c5f](https://github.com/camunda/camunda-schema-bundler/commit/d766c5ffbcd2309dfa43bf81ba711e3e90f4d8e8))
+* inline path-local $refs in parameters arrays ([4aff6d1](https://github.com/camunda/camunda-schema-bundler/commit/4aff6d1cb110381cce196493729169a0df6d03cd))
+
 ## [2.4.4](https://github.com/camunda/camunda-schema-bundler/compare/v2.4.3...v2.4.4) (2026-06-15)
 
 
