@@ -23,6 +23,7 @@
  *   --deref-path-local        Inline remaining path-local $refs (for Microsoft.OpenApi)
  *   --allow-like-refs         Don't fail on surviving path-local $like refs
  *   --allow-param-refs        Don't fail on surviving path-local $refs in parameters
+ *   --allow-interior-refs     Don't fail on $refs pointing inside a component schema
  *   --allow-ambiguous-inlines Don't fail on ambiguous inline schemas
  *   --help                    Show help
  */
@@ -46,6 +47,7 @@ interface CliArgs {
   derefPathLocal: boolean;
   allowLikeRefs: boolean;
   allowParamRefs: boolean;
+  allowInteriorRefs: boolean;
   allowAmbiguousInlines: boolean;
   skipFetchIfExists: boolean;
   help: boolean;
@@ -59,6 +61,7 @@ function parseArgs(argv: string[]): CliArgs {
     derefPathLocal: false,
     allowLikeRefs: false,
     allowParamRefs: false,
+    allowInteriorRefs: false,
     allowAmbiguousInlines: false,
     skipFetchIfExists: false,
     help: false,
@@ -108,6 +111,9 @@ function parseArgs(argv: string[]): CliArgs {
         break;
       case '--allow-param-refs':
         args.allowParamRefs = true;
+        break;
+      case '--allow-interior-refs':
+        args.allowInteriorRefs = true;
         break;
       case '--allow-ambiguous-inlines':
         args.allowAmbiguousInlines = true;
@@ -160,6 +166,7 @@ Bundle options:
   --deref-path-local        Inline remaining path-local $refs
   --allow-like-refs         Don't fail on surviving path-local $like refs
   --allow-param-refs        Don't fail on surviving path-local $refs in parameters
+  --allow-interior-refs     Don't fail on $refs pointing inside a component schema
   --allow-ambiguous-inlines Don't fail when inline schemas match multiple components
   --help, -h                Show this help
   --version, -v             Show version
@@ -264,6 +271,7 @@ async function main(): Promise<void> {
     dereferencePathLocalRefs: args.derefPathLocal,
     allowPathLocalLikeRefs: args.allowLikeRefs,
     allowPathLocalParameterRefs: args.allowParamRefs,
+    allowComponentInteriorRefs: args.allowInteriorRefs,
     allowAmbiguousInlines: args.allowAmbiguousInlines,
   });
 
@@ -294,6 +302,12 @@ async function main(): Promise<void> {
   if (result.stats.inlinedPathLocalParameterCount > 0) {
     console.log(
       `[camunda-schema-bundler] Inlined ${result.stats.inlinedPathLocalParameterCount} path-local $refs in parameters arrays`
+    );
+  }
+
+  if (result.stats.collapsedComponentInteriorRefCount > 0) {
+    console.log(
+      `[camunda-schema-bundler] Retargeted ${result.stats.collapsedComponentInteriorRefCount} $refs pointing inside component schemas`
     );
   }
 
