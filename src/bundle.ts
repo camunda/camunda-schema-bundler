@@ -23,6 +23,7 @@ import {
   forEachParameterArray,
   findPathLocalParameterRefs,
   sortRequiredArrays,
+  collapseComponentInteriorRefs,
 } from './helpers.js';
 import type { BundleOptions, BundleResult, BundleStats } from './types.js';
 import { extractMetadata } from './metadata.js';
@@ -734,6 +735,8 @@ export async function bundle(options: BundleOptions): Promise<BundleResult> {
     dereferencedPathLocalRefCount: 0,
     pathLocalLikeRefCount: 0,
     inlinedPathLocalParameterCount: 0,
+    collapsedComponentInteriorRefCount: 0,
+    componentInteriorRefCount: 0,
   };
 
   // ── Step 1: Bundle multi-file YAML into a single document ─────────────────
@@ -1179,6 +1182,25 @@ export async function bundle(options: BundleOptions): Promise<BundleResult> {
     );
   }
 
+  // ── Step 4c: Retarget $refs that point inside a component schema ──────────
+  //
+  // When a schema is first met nested inside another component (e.g. as an
+  // `allOf` member of a derived schema that is the only one listed in the
+  // entry file), `SwaggerParser.bundle()` inlines it there and points every
+  // other use at that interior location:
+  //
+  //   GET /authentication/me → 200:
+  //     $ref: '#/components/schemas/AuthenticatedCamundaUserResult/allOf/0'
+  //
+  // Step 2 restores the base schema as a component and fresh dedup replaces
+  // the nested copy with a ref to it, leaving a ref to a ref. Generators cannot
+  // follow it (openapi-python-client drops the response; the C# generator
+  // types it as `object`), so collapse it onto the component it resolves to.
+  // Must run after fresh dedup, which is what turns the target into a ref.
+  const interior = collapseComponentInteriorRefs(bundled);
+  stats.collapsedComponentInteriorRefCount = interior.collapsed;
+  stats.componentInteriorRefCount = interior.unresolved.length;
+
   // ── Step 5: Validate ──────────────────────────────────────────────────────
 
   // Fail if any inline schemas remain that match multiple component schemas
@@ -1223,6 +1245,19 @@ export async function bundle(options: BundleOptions): Promise<BundleResult> {
         `\n\nThese cannot be resolved by openapi-generator or Microsoft.OpenApi and cause ` +
         `"duplicate parameter values" failures. Set allowPathLocalParameterRefs ` +
         `(CLI: --allow-param-refs) to bypass.`
+    );
+  }
+
+  // Step 4c could not retarget these: the interior location is not, and does
+  // not resolve to, a named component, so there is no type to point at.
+  if (interior.unresolved.length > 0 && !options.allowComponentInteriorRefs) {
+    throw new Error(
+      `${interior.unresolved.length} $ref(s) point inside a component schema and could not be ` +
+        `retargeted to a named component:\n` +
+        interior.unresolved.map((r) => `  ${r}`).join('\n') +
+        `\n\nGenerators cannot resolve these and emit a missing or untyped (object) result. ` +
+        `Fix: give the referenced schema its own entry under components.schemas and $ref it ` +
+        `by name. Set allowComponentInteriorRefs (CLI: --allow-interior-refs) to bypass.`
     );
   }
 

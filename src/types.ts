@@ -56,6 +56,9 @@ export interface FetchAndBundleOptions {
   /** If true, allow surviving path-local $refs inside `parameters` arrays. */
   allowPathLocalParameterRefs?: boolean;
 
+  /** If true, allow surviving $refs that point inside a component schema. */
+  allowComponentInteriorRefs?: boolean;
+
   /** If true, allow ambiguous inline schemas that match multiple component schemas. */
   allowAmbiguousInlines?: boolean;
 
@@ -120,6 +123,13 @@ export interface BundleOptions {
   allowPathLocalParameterRefs?: boolean;
 
   /**
+   * If true, allow surviving `$ref`s that point inside a component schema
+   * (e.g. `#/components/schemas/Foo/allOf/0`) and cannot be retargeted to a
+   * named component, without failing. Default: false (fail-fast).
+   */
+  allowComponentInteriorRefs?: boolean;
+
+  /**
    * If true, allow ambiguous inline schemas that match multiple component
    * schemas without failing. Default: false (fail-fast).
    */
@@ -162,6 +172,10 @@ export interface BundleStats {
   pathLocalLikeRefCount: number;
   /** Path-local `$refs` inlined inside `parameters` arrays (always applied). */
   inlinedPathLocalParameterCount: number;
+  /** `$ref`s pointing inside a component schema, retargeted to the named component. */
+  collapsedComponentInteriorRefCount: number;
+  /** `$ref`s pointing inside a component schema that could not be retargeted. */
+  componentInteriorRefCount: number;
 
   /**
    * `true` when the caller requested `outputEndpointMap` (or `--output-endpoint-map`).

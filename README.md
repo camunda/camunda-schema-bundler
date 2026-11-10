@@ -109,6 +109,7 @@ camunda-schema-bundler --version
 | `--deref-path-local` | Inline remaining path-local `$ref`s (needed for Microsoft.OpenApi) |
 | `--allow-like-refs` | Don't fail on surviving path-local `$like` refs |
 | `--allow-param-refs` | Don't fail on surviving path-local `$ref`s inside `parameters` arrays |
+| `--allow-interior-refs` | Don't fail on `$ref`s that point inside a component schema (e.g. `#/components/schemas/Foo/allOf/0`) and cannot be retargeted to a named component |
 | **General** | |
 | `--help`, `-h` | Show help |
 | `--version`, `-v` | Show version |
@@ -210,11 +211,12 @@ import {
    - `x-semantic-type` extension rewriting
 5. **Promote** — Inline schemas that couldn't be matched to existing components are promoted to new named component schemas
 6. **Fresh dedup** — Iterative pass (up to 10 rounds until convergence) that deduplicates newly-promoted schemas against each other and existing components using signature matching, including resolution through intermediate `$ref` chains
-7. **Rewrite** — Decode URI-encoded internal refs (`%24like` → `$like`)
-8. **Inline parameter refs** — Always inline path-local `$ref`s that survive inside `parameters` arrays. `SwaggerParser.bundle()` drops `components.parameters` entirely and dedupes the resulting identical parameter objects into `#/paths/...` refs, which step 4 cannot rewrite because there is no surviving component to point at. Generators cannot resolve them (openapi-generator aborts with "There are duplicate parameter values"), and parameters are never emitted as named types, so inlining is lossless. Fail-fast if any survive (configurable with `--allow-param-refs`)
-9. **Validate** — Fail-fast if any path-local `$like` refs survive (configurable with `--allow-like-refs`)
-10. **Dereference** (optional, `--deref-path-local`) — Inline remaining path-local `$ref`s for strict generators
-11. **Extract metadata** — Build the intermediate representation (semantic keys, unions, operations, etc.)
+7. **Retarget interior refs** — Rewrite `$ref`s that point inside a component schema (e.g. `#/components/schemas/AuthenticatedCamundaUserResult/allOf/0`) to the named component they resolve to. `SwaggerParser.bundle()` emits these when a schema is first met nested inside another component; once fresh dedup turns the nested copy into a component ref, they are refs to refs that generators cannot follow. Fail-fast if any cannot be retargeted (configurable with `--allow-interior-refs`)
+8. **Rewrite** — Decode URI-encoded internal refs (`%24like` → `$like`)
+9. **Inline parameter refs** — Always inline path-local `$ref`s that survive inside `parameters` arrays. `SwaggerParser.bundle()` drops `components.parameters` entirely and dedupes the resulting identical parameter objects into `#/paths/...` refs, which step 4 cannot rewrite because there is no surviving component to point at. Generators cannot resolve them (openapi-generator aborts with "There are duplicate parameter values"), and parameters are never emitted as named types, so inlining is lossless. Fail-fast if any survive (configurable with `--allow-param-refs`)
+10. **Validate** — Fail-fast if any path-local `$like` refs survive (configurable with `--allow-like-refs`)
+11. **Dereference** (optional, `--deref-path-local`) — Inline remaining path-local `$ref`s for strict generators
+12. **Extract metadata** — Build the intermediate representation (semantic keys, unions, operations, etc.)
 
 ## Metadata IR
 

@@ -143,6 +143,90 @@ export function resolveInternalRef(
   return cur;
 }
 
+const COMPONENT_SCHEMA_REF = /^#\/components\/schemas\/([^/]+)$/;
+const COMPONENT_INTERIOR_SCHEMA_REF = /^#\/components\/schemas\/[^/]+\/./;
+
+/**
+ * True for a `$ref` that points inside a component schema rather than at one,
+ * e.g. `#/components/schemas/Foo/allOf/0`.
+ */
+export function isComponentInteriorSchemaRef(ref: string): boolean {
+  return COMPONENT_INTERIOR_SCHEMA_REF.test(ref);
+}
+
+/**
+ * Retarget every `$ref` that points inside a component schema to the named
+ * component it ultimately resolves to.
+ *
+ * `SwaggerParser.bundle()` emits such refs when it first meets a schema nested
+ * inside another component (e.g. as an `allOf` member). Once dedup has turned
+ * that nested copy into `{ $ref: '#/components/schemas/Base' }`, the interior
+ * ref is a ref to a ref, which generators cannot follow. The target is followed
+ * through any chain of bare (`$ref`-only) nodes; a ref is only retargeted when
+ * the chain ends at an existing top-level component.
+ *
+ * Refs that cannot be retargeted are left in place and returned, each with the
+ * JSON Pointer of the node that holds it, so the caller can fail loudly.
+ */
+export function collapseComponentInteriorRefs(root: Record<string, unknown>): {
+  collapsed: number;
+  unresolved: string[];
+} {
+  const components = root['components'] as Record<string, unknown> | undefined;
+  const schemas = (components?.['schemas'] ?? {}) as Record<string, unknown>;
+
+  const resolveToComponent = (ref: string): string | undefined => {
+    const visited = new Set<string>();
+    let cur = ref;
+    while (isComponentInteriorSchemaRef(cur)) {
+      if (visited.has(cur)) return undefined;
+      visited.add(cur);
+      const target = resolveInternalRef(root, cur);
+      if (!target || typeof target !== 'object' || Array.isArray(target)) {
+        return undefined;
+      }
+      const keys = Object.keys(target);
+      const next = (target as Record<string, unknown>)['$ref'];
+      if (keys.length !== 1 || typeof next !== 'string') return undefined;
+      cur = next;
+    }
+    const name = COMPONENT_SCHEMA_REF.exec(cur)?.[1];
+    return name !== undefined && jsonPointerDecode(name) in schemas ? cur : undefined;
+  };
+
+  let collapsed = 0;
+  const unresolved: string[] = [];
+  const stack: { node: unknown; at: string }[] = [{ node: root, at: '#' }];
+  const seen = new Set<unknown>();
+  while (stack.length) {
+    const { node, at } = stack.pop()!;
+    if (!node || typeof node !== 'object' || seen.has(node)) continue;
+    seen.add(node);
+    if (Array.isArray(node)) {
+      node.forEach((v, i) => stack.push({ node: v, at: `${at}/${i}` }));
+      continue;
+    }
+    const obj = node as Record<string, unknown>;
+    const ref = obj['$ref'];
+    if (typeof ref === 'string' && isComponentInteriorSchemaRef(ref)) {
+      const target = resolveToComponent(ref);
+      if (target) {
+        obj['$ref'] = target;
+        collapsed++;
+      } else {
+        unresolved.push(`${at} -> ${ref}`);
+      }
+    }
+    for (const [k, v] of Object.entries(obj)) {
+      if (k !== '$ref') {
+        stack.push({ node: v, at: `${at}/${k.replace(/~/g, '~0').replace(/\//g, '~1')}` });
+      }
+    }
+  }
+  unresolved.sort();
+  return { collapsed, unresolved };
+}
+
 /**
  * Deep-sort object keys recursively for canonical comparison.
  */
