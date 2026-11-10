@@ -1,3 +1,11 @@
+## [2.4.6](https://github.com/camunda/camunda-schema-bundler/compare/v2.4.5...v2.4.6) (2026-11-10)
+
+
+### Bug Fixes
+
+* retarget $refs that point inside a component schema ([73a14f6](https://github.com/camunda/camunda-schema-bundler/commit/73a14f6ef3702b661acc6f6a332335b1f36070bf))
+* retarget $refs that point inside a component schema ([1da644d](https://github.com/camunda/camunda-schema-bundler/commit/1da644d9b97464af50df5e9193f26be5bbdcb304))
+
 ## [2.4.5](https://github.com/camunda/camunda-schema-bundler/compare/v2.4.4...v2.4.5) (2026-08-13)
 
 
