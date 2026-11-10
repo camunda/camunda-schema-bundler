@@ -146,6 +146,22 @@ export function resolveInternalRef(
 const COMPONENT_SCHEMA_REF = /^#\/components\/schemas\/([^/]+)$/;
 const COMPONENT_INTERIOR_SCHEMA_REF = /^#\/components\/schemas\/[^/]+\/./;
 
+/** Keywords whose value is literal instance data, never an OpenAPI reference. */
+const LITERAL_PAYLOAD_KEYS = new Set(['example', 'default', 'enum', 'const']);
+
+/** Keys whose value is a map from user-chosen names to OpenAPI objects. */
+const NAME_MAP_KEYS = new Set([
+  'paths', 'schemas', 'properties', 'patternProperties', 'responses',
+  'parameters', 'requestBodies', 'headers', 'content', 'encoding', 'links',
+  'callbacks', 'securitySchemes', 'variables',
+]);
+
+/**
+ * `nameMap` / `exampleMap`: keys are names, so keywords are not interpreted.
+ * `exampleObject`: an Example Object, whose `value` is literal data.
+ */
+type WalkKind = 'object' | 'nameMap' | 'exampleMap' | 'exampleObject';
+
 /**
  * True for a `$ref` that points inside a component schema rather than at one,
  * e.g. `#/components/schemas/Foo/allOf/0`.
@@ -162,8 +178,14 @@ export function isComponentInteriorSchemaRef(ref: string): boolean {
  * inside another component (e.g. as an `allOf` member). Once dedup has turned
  * that nested copy into `{ $ref: '#/components/schemas/Base' }`, the interior
  * ref is a ref to a ref, which generators cannot follow. The target is followed
- * through any chain of bare (`$ref`-only) nodes; a ref is only retargeted when
- * the chain ends at an existing top-level component.
+ * through any chain of bare (`$ref`-only) internal nodes, wherever they live; a
+ * ref is only retargeted when the chain ends at an existing top-level component.
+ *
+ * Literal instance data (`example`, `default`, `enum`, `const`, schema-level
+ * `examples` arrays and Example Object `value`s) is not an OpenAPI reference
+ * context, so a `$ref` key inside it is neither rewritten nor reported. The
+ * same words are still traversed where they name a map entry (a `default`
+ * response, a property called `example`).
  *
  * Refs that cannot be retargeted are left in place and returned, each with the
  * JSON Pointer of the node that holds it, so the caller can fail loudly.
@@ -178,8 +200,8 @@ export function collapseComponentInteriorRefs(root: Record<string, unknown>): {
   const resolveToComponent = (ref: string): string | undefined => {
     const visited = new Set<string>();
     let cur = ref;
-    while (isComponentInteriorSchemaRef(cur)) {
-      if (visited.has(cur)) return undefined;
+    while (!COMPONENT_SCHEMA_REF.test(cur)) {
+      if (!cur.startsWith('#/') || visited.has(cur)) return undefined;
       visited.add(cur);
       const target = resolveInternalRef(root, cur);
       if (!target || typeof target !== 'object' || Array.isArray(target)) {
@@ -196,19 +218,22 @@ export function collapseComponentInteriorRefs(root: Record<string, unknown>): {
 
   let collapsed = 0;
   const unresolved: string[] = [];
-  const stack: { node: unknown; at: string }[] = [{ node: root, at: '#' }];
+  const stack: { node: unknown; at: string; kind: WalkKind }[] = [
+    { node: root, at: '#', kind: 'object' },
+  ];
   const seen = new Set<unknown>();
   while (stack.length) {
-    const { node, at } = stack.pop()!;
+    const { node, at, kind } = stack.pop()!;
     if (!node || typeof node !== 'object' || seen.has(node)) continue;
     seen.add(node);
     if (Array.isArray(node)) {
-      node.forEach((v, i) => stack.push({ node: v, at: `${at}/${i}` }));
+      node.forEach((v, i) => stack.push({ node: v, at: `${at}/${i}`, kind: 'object' }));
       continue;
     }
     const obj = node as Record<string, unknown>;
+    const isMap = kind === 'nameMap' || kind === 'exampleMap';
     const ref = obj['$ref'];
-    if (typeof ref === 'string' && isComponentInteriorSchemaRef(ref)) {
+    if (!isMap && typeof ref === 'string' && isComponentInteriorSchemaRef(ref)) {
       const target = resolveToComponent(ref);
       if (target) {
         obj['$ref'] = target;
@@ -218,9 +243,18 @@ export function collapseComponentInteriorRefs(root: Record<string, unknown>): {
       }
     }
     for (const [k, v] of Object.entries(obj)) {
-      if (k !== '$ref') {
-        stack.push({ node: v, at: `${at}/${k.replace(/~/g, '~0').replace(/\//g, '~1')}` });
+      const childAt = `${at}/${k.replace(/~/g, '~0').replace(/\//g, '~1')}`;
+      if (isMap) {
+        stack.push({ node: v, at: childAt, kind: kind === 'exampleMap' ? 'exampleObject' : 'object' });
+        continue;
       }
+      if (k === '$ref' || LITERAL_PAYLOAD_KEYS.has(k)) continue;
+      if (kind === 'exampleObject' && k === 'value') continue;
+      if (k === 'examples') {
+        if (!Array.isArray(v)) stack.push({ node: v, at: childAt, kind: 'exampleMap' });
+        continue;
+      }
+      stack.push({ node: v, at: childAt, kind: NAME_MAP_KEYS.has(k) ? 'nameMap' : 'object' });
     }
   }
   unresolved.sort();

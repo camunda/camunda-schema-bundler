@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { bundle } from '../src/bundle.js';
+import { collapseComponentInteriorRefs } from '../src/helpers.js';
 
 /**
  * Regression test for `$ref`s that point *inside* a component schema, e.g.
@@ -180,5 +181,172 @@ components:
   it('can be bypassed with allowComponentInteriorRefs', async () => {
     const result = await bundle({ specDir, allowComponentInteriorRefs: true });
     expect(result.stats.componentInteriorRefCount).toBe(1);
+  });
+});
+
+describe('collapseComponentInteriorRefs', () => {
+  const INTERIOR = '#/components/schemas/Wrapper/properties/inner';
+
+  function doc(extra: Record<string, unknown> = {}): Record<string, any> {
+    return {
+      paths: {},
+      components: {
+        schemas: {
+          Base: { type: 'object', properties: { id: { type: 'string' } } },
+          Wrapper: {
+            type: 'object',
+            properties: { inner: { $ref: '#/components/schemas/Base' } },
+          },
+          Opaque: {
+            type: 'object',
+            properties: { inner: { type: 'object', properties: { x: { type: 'string' } } } },
+          },
+        },
+      },
+      ...extra,
+    };
+  }
+
+  it('follows bare $refs through non-component locations to a component', () => {
+    const spec = doc({
+      paths: {
+        '/a': {
+          get: {
+            responses: {
+              '200': {
+                description: 'OK',
+                content: {
+                  'application/json': { schema: { $ref: '#/components/schemas/Base' } },
+                },
+              },
+            },
+          },
+        },
+        '/b': {
+          get: {
+            responses: {
+              '200': {
+                description: 'OK',
+                content: { 'application/json': { schema: { $ref: INTERIOR } } },
+              },
+            },
+          },
+        },
+      },
+    });
+    spec.components.schemas.Wrapper.properties.inner = {
+      $ref: '#/paths/~1a/get/responses/200/content/application~1json/schema',
+    };
+
+    const result = collapseComponentInteriorRefs(spec);
+
+    expect(result.unresolved).toEqual([]);
+    expect(spec.paths['/b'].get.responses['200'].content['application/json'].schema).toEqual({
+      $ref: '#/components/schemas/Base',
+    });
+  });
+
+  it('reports a cycle of bare $refs as unresolved instead of looping', () => {
+    const spec = doc();
+    spec.components.schemas.Wrapper.properties.inner = {
+      $ref: '#/components/schemas/Wrapper/properties/other',
+    };
+    spec.components.schemas.Wrapper.properties.other = { $ref: INTERIOR };
+    spec.paths = { '/c': { get: { responses: { '200': { description: 'OK', content: { 'application/json': { schema: { $ref: INTERIOR } } } } } } } };
+
+    const result = collapseComponentInteriorRefs(spec);
+
+    expect(result.collapsed).toBe(0);
+    expect(result.unresolved.length).toBeGreaterThan(0);
+  });
+
+  // Payload keywords hold literal instance data, not OpenAPI references. A
+  // `$ref` key inside them must be neither rewritten nor reported.
+  it.each([
+    ['example', (v: unknown) => ({ type: 'object', example: v })],
+    ['default', (v: unknown) => ({ type: 'object', default: v })],
+    ['enum', (v: unknown) => ({ type: 'object', enum: [v] })],
+    ['const', (v: unknown) => ({ type: 'object', const: v })],
+    ['examples (schema array)', (v: unknown) => ({ type: 'object', examples: [v] })],
+  ])('leaves literal $ref values under %s untouched', (_label, wrap) => {
+    for (const target of [INTERIOR, '#/components/schemas/Opaque/properties/inner']) {
+      const spec = doc();
+      spec.components.schemas.Payload = wrap({ $ref: target });
+      const before = JSON.stringify(spec.components.schemas.Payload);
+
+      const result = collapseComponentInteriorRefs(spec);
+
+      expect(result).toEqual({ collapsed: 0, unresolved: [] });
+      expect(JSON.stringify(spec.components.schemas.Payload)).toBe(before);
+    }
+  });
+
+  it('leaves literal $ref values in Example Objects untouched', () => {
+    const spec = doc({
+      paths: {
+        '/d': {
+          get: {
+            responses: {
+              '200': {
+                description: 'OK',
+                content: {
+                  'application/json': {
+                    schema: { $ref: '#/components/schemas/Base' },
+                    examples: {
+                      sample: { value: { $ref: '#/components/schemas/Opaque/properties/inner' } },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    });
+    const before = JSON.stringify(spec.paths);
+
+    expect(collapseComponentInteriorRefs(spec)).toEqual({ collapsed: 0, unresolved: [] });
+    expect(JSON.stringify(spec.paths)).toBe(before);
+  });
+
+  // The same words are structural when they name a map entry rather than a
+  // keyword: a `default` response, or a schema property called `example`,
+  // `default` or `value`. Refs there must still be retargeted.
+  it('still retargets refs under map entries that share a payload keyword name', () => {
+    const spec = doc({
+      paths: {
+        '/e': {
+          get: {
+            responses: {
+              default: {
+                description: 'Error',
+                content: { 'application/json': { schema: { $ref: INTERIOR } } },
+              },
+            },
+          },
+        },
+      },
+    });
+    spec.components.schemas.Holder = {
+      type: 'object',
+      properties: {
+        example: { $ref: INTERIOR },
+        default: { $ref: INTERIOR },
+        value: { $ref: INTERIOR },
+        enum: { $ref: INTERIOR },
+      },
+    };
+
+    const result = collapseComponentInteriorRefs(spec);
+
+    expect(result).toEqual({ collapsed: 5, unresolved: [] });
+    expect(spec.paths['/e'].get.responses.default.content['application/json'].schema).toEqual({
+      $ref: '#/components/schemas/Base',
+    });
+    for (const p of ['example', 'default', 'value', 'enum']) {
+      expect(spec.components.schemas.Holder.properties[p]).toEqual({
+        $ref: '#/components/schemas/Base',
+      });
+    }
   });
 });
