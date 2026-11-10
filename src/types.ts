@@ -170,6 +170,8 @@ export interface BundleStats {
   ambiguousInlineCount: number;
   dereferencedPathLocalRefCount: number;
   pathLocalLikeRefCount: number;
+  /** `$ref`s into a component subtree rewritten to the named schema they resolve to. */
+  componentSubtreeRefsCollapsed: number;
   /** Path-local `$refs` inlined inside `parameters` arrays (always applied). */
   inlinedPathLocalParameterCount: number;
   /** `$ref`s pointing inside a component schema, retargeted to the named component. */

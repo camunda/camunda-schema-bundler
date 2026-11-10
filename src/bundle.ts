@@ -734,6 +734,7 @@ export async function bundle(options: BundleOptions): Promise<BundleResult> {
     ambiguousInlineCount: 0,
     dereferencedPathLocalRefCount: 0,
     pathLocalLikeRefCount: 0,
+    componentSubtreeRefsCollapsed: 0,
     inlinedPathLocalParameterCount: 0,
     collapsedComponentInteriorRefCount: 0,
     componentInteriorRefCount: 0,
@@ -1083,6 +1084,76 @@ export async function bundle(options: BundleOptions): Promise<BundleResult> {
       // A resolved parameter can itself carry a path-local $ref (a chain);
       // iterate until convergence.
       if (inlined === 0) break;
+    }
+  }
+
+  // ── Step 3e: Collapse $refs that point into a component subtree ──────────
+  //
+  // When a named schema is first reached through another component's
+  // composition, `SwaggerParser.bundle()` emits every other use of it as a
+  // pointer into that component instead of a ref to the schema itself:
+  //
+  //   GET /authentication/me -> 200:
+  //     $ref: '#/components/schemas/AuthenticatedCamundaUserResult/allOf/0'
+  //
+  // where `allOf/0` is just `{ $ref: '#/components/schemas/CamundaUserResult' }`
+  // (camunda/camunda 1df63b8507). The pointer resolves, but generators name
+  // the target after the pointer: openapi-generator (PHP) emitted a
+  // non-existent `Model0` class. When the pointer lands on a bare `$ref`,
+  // the two are the same schema, so rewrite to the final target. This runs
+  // unconditionally: `--deref-path-local` only handles `#/paths/` refs.
+  {
+    const isComponentSubtreeRef = (ref: string): boolean =>
+      /^#\/components\/[^/]+\/[^/]+\/./.test(ref);
+    const bareRefTarget = (ref: string): string | undefined => {
+      const target = resolveInternalRef(bundled, ref);
+      if (!target || typeof target !== 'object' || Array.isArray(target)) return undefined;
+      const keys = Object.keys(target as Record<string, unknown>);
+      const next = (target as Record<string, unknown>)['$ref'];
+      return keys.length === 1 && typeof next === 'string' ? next : undefined;
+    };
+
+    const survivors: string[] = [];
+    const seen = new Set<unknown>();
+    const stack: unknown[] = [bundled];
+    while (stack.length) {
+      const node = stack.pop();
+      if (!node || typeof node !== 'object' || seen.has(node)) continue;
+      seen.add(node);
+      if (Array.isArray(node)) {
+        stack.push(...node);
+        continue;
+      }
+      const obj = node as Record<string, unknown>;
+      const ref = obj['$ref'];
+      if (typeof ref === 'string' && isComponentSubtreeRef(ref)) {
+        let resolved: string = ref;
+        const chain = new Set<string>();
+        while (isComponentSubtreeRef(resolved)) {
+          if (chain.has(resolved)) break;
+          chain.add(resolved);
+          const next = bareRefTarget(resolved);
+          if (next === undefined) break;
+          resolved = next;
+        }
+        if (isComponentSubtreeRef(resolved)) {
+          survivors.push(ref);
+        } else {
+          obj['$ref'] = resolved;
+          stats.componentSubtreeRefsCollapsed++;
+        }
+      }
+      for (const [k, v] of Object.entries(obj)) if (k !== '$ref') stack.push(v);
+    }
+
+    if (survivors.length > 0) {
+      throw new Error(
+        `${survivors.length} $ref(s) point inside a component schema and do not resolve ` +
+          `to a named schema:\n` +
+          [...new Set(survivors)].map((r) => `  ${r}`).join('\n') +
+          `\n\nGenerators would name the target after the JSON pointer (e.g. \`Model0\`). ` +
+          `Fix: register the referenced schema as a named component upstream.`
+      );
     }
   }
 
