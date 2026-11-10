@@ -350,3 +350,94 @@ describe('collapseComponentInteriorRefs', () => {
     }
   });
 });
+
+describe('collapseComponentInteriorRefs — Link Objects and extensions', () => {
+  const RESOLVABLE = '#/components/schemas/Wrapper/properties/inner';
+  const UNRESOLVED = '#/components/schemas/Opaque/properties/inner';
+
+  function doc(): Record<string, any> {
+    return {
+      paths: {},
+      components: {
+        schemas: {
+          Base: { type: 'object', properties: { id: { type: 'string' } } },
+          Wrapper: {
+            type: 'object',
+            properties: { inner: { $ref: '#/components/schemas/Base' } },
+          },
+          Opaque: {
+            type: 'object',
+            properties: { inner: { type: 'object', properties: { x: { type: 'string' } } } },
+          },
+        },
+      },
+    };
+  }
+
+  // Link Object `parameters` values and `requestBody` are literal values or
+  // runtime expressions, not Parameter / Request Body Objects.
+  const literalLink = (target: string) => ({
+    operationId: 'getThing',
+    parameters: { thing: { $ref: target } },
+    requestBody: { $ref: target },
+  });
+
+  it.each([RESOLVABLE, UNRESOLVED])(
+    'leaves literal $ref values in Link Objects untouched (%s)',
+    (target) => {
+      const spec = doc();
+      spec.paths = {
+        '/f': {
+          get: {
+            responses: {
+              '200': { description: 'OK', links: { next: literalLink(target) } },
+            },
+          },
+        },
+      };
+      spec.components.links = { Shared: literalLink(target) };
+      const before = JSON.stringify({ p: spec.paths, l: spec.components.links });
+
+      expect(collapseComponentInteriorRefs(spec)).toEqual({ collapsed: 0, unresolved: [] });
+      expect(JSON.stringify({ p: spec.paths, l: spec.components.links })).toBe(before);
+    }
+  );
+
+  it.each([RESOLVABLE, UNRESOLVED])(
+    'leaves $ref values inside x- extensions untouched (%s)',
+    (target) => {
+      const spec = doc();
+      spec.components.schemas.Ext = { type: 'object', 'x-vendor': { $ref: target } };
+      spec['x-top'] = { nested: [{ $ref: target }] };
+      const before = JSON.stringify({ e: spec.components.schemas.Ext, t: spec['x-top'] });
+
+      expect(collapseComponentInteriorRefs(spec)).toEqual({ collapsed: 0, unresolved: [] });
+      expect(JSON.stringify({ e: spec.components.schemas.Ext, t: spec['x-top'] })).toBe(before);
+    }
+  );
+
+  it('still retargets refs in operation requestBody and parameters', () => {
+    const spec = doc();
+    spec.paths = {
+      '/g': {
+        post: {
+          parameters: [{ name: 'q', in: 'query', schema: { $ref: RESOLVABLE } }],
+          requestBody: { content: { 'application/json': { schema: { $ref: RESOLVABLE } } } },
+          responses: { '204': { description: 'No content' } },
+        },
+      },
+    };
+    spec.components.parameters = { Q: { name: 'q', in: 'query', schema: { $ref: RESOLVABLE } } };
+    spec.components.requestBodies = {
+      B: { content: { 'application/json': { schema: { $ref: RESOLVABLE } } } },
+    };
+
+    expect(collapseComponentInteriorRefs(spec)).toEqual({ collapsed: 4, unresolved: [] });
+    const op = spec.paths['/g'].post;
+    const base = { $ref: '#/components/schemas/Base' };
+    expect(op.parameters[0].schema).toEqual(base);
+    expect(op.requestBody.content['application/json'].schema).toEqual(base);
+    expect(spec.components.parameters.Q.schema).toEqual(base);
+    expect(spec.components.requestBodies.B.content['application/json'].schema).toEqual(base);
+  });
+});

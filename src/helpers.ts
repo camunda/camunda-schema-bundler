@@ -153,14 +153,29 @@ const LITERAL_PAYLOAD_KEYS = new Set(['example', 'default', 'enum', 'const']);
 const NAME_MAP_KEYS = new Set([
   'paths', 'schemas', 'properties', 'patternProperties', 'responses',
   'parameters', 'requestBodies', 'headers', 'content', 'encoding', 'links',
-  'callbacks', 'securitySchemes', 'variables',
+  'callbacks', 'securitySchemes', 'variables', 'examples',
 ]);
 
 /**
- * `nameMap` / `exampleMap`: keys are names, so keywords are not interpreted.
- * `exampleObject`: an Example Object, whose `value` is literal data.
+ * `object`: an OpenAPI object or schema, whose keys are keywords.
+ * `nameMap`: keys are user-chosen names, so keywords are not interpreted.
+ * `exampleObject` / `linkObject`: objects with keys that hold literal data.
  */
-type WalkKind = 'object' | 'nameMap' | 'exampleMap' | 'exampleObject';
+type ObjectKind = 'object' | 'exampleObject' | 'linkObject';
+type WalkKind = ObjectKind | 'nameMap';
+
+/** Map entries that are not plain OpenAPI objects, keyed by the map's key. */
+const MAP_ENTRY_KIND: Record<string, ObjectKind> = {
+  examples: 'exampleObject',
+  links: 'linkObject',
+};
+
+/** Keys holding literal values or runtime expressions, never OpenAPI objects. */
+const LITERAL_KEYS_BY_KIND: Record<ObjectKind, ReadonlySet<string>> = {
+  object: new Set(),
+  exampleObject: new Set(['value']),
+  linkObject: new Set(['parameters', 'requestBody']),
+};
 
 /**
  * True for a `$ref` that points inside a component schema rather than at one,
@@ -168,6 +183,10 @@ type WalkKind = 'object' | 'nameMap' | 'exampleMap' | 'exampleObject';
  */
 export function isComponentInteriorSchemaRef(ref: string): boolean {
   return COMPONENT_INTERIOR_SCHEMA_REF.test(ref);
+}
+
+function escapePointerSegment(segment: string): string {
+  return segment.replace(/~/g, '~0').replace(/\//g, '~1');
 }
 
 /**
@@ -181,11 +200,12 @@ export function isComponentInteriorSchemaRef(ref: string): boolean {
  * through any chain of bare (`$ref`-only) internal nodes, wherever they live; a
  * ref is only retargeted when the chain ends at an existing top-level component.
  *
- * Literal instance data (`example`, `default`, `enum`, `const`, schema-level
- * `examples` arrays and Example Object `value`s) is not an OpenAPI reference
- * context, so a `$ref` key inside it is neither rewritten nor reported. The
- * same words are still traversed where they name a map entry (a `default`
- * response, a property called `example`).
+ * Literal data is not an OpenAPI reference context, so a `$ref` key inside it
+ * is neither rewritten nor reported: `example`, `default`, `enum`, `const`,
+ * schema-level `examples` arrays, Example Object `value`s, Link Object
+ * `parameters` and `requestBody`, and `x-` extensions. The same words are still
+ * traversed where they name a map entry (a `default` response, a property
+ * called `example`) or an operation's own `parameters` / `requestBody`.
  *
  * Refs that cannot be retargeted are left in place and returned, each with the
  * JSON Pointer of the node that holds it, so the caller can fail loudly.
@@ -218,12 +238,12 @@ export function collapseComponentInteriorRefs(root: Record<string, unknown>): {
 
   let collapsed = 0;
   const unresolved: string[] = [];
-  const stack: { node: unknown; at: string; kind: WalkKind }[] = [
+  const stack: { node: unknown; at: string; kind: WalkKind; entryKind?: ObjectKind }[] = [
     { node: root, at: '#', kind: 'object' },
   ];
   const seen = new Set<unknown>();
   while (stack.length) {
-    const { node, at, kind } = stack.pop()!;
+    const { node, at, kind, entryKind = 'object' } = stack.pop()!;
     if (!node || typeof node !== 'object' || seen.has(node)) continue;
     seen.add(node);
     if (Array.isArray(node)) {
@@ -231,9 +251,14 @@ export function collapseComponentInteriorRefs(root: Record<string, unknown>): {
       continue;
     }
     const obj = node as Record<string, unknown>;
-    const isMap = kind === 'nameMap' || kind === 'exampleMap';
+    if (kind === 'nameMap') {
+      for (const [k, v] of Object.entries(obj)) {
+        stack.push({ node: v, at: `${at}/${escapePointerSegment(k)}`, kind: entryKind });
+      }
+      continue;
+    }
     const ref = obj['$ref'];
-    if (!isMap && typeof ref === 'string' && isComponentInteriorSchemaRef(ref)) {
+    if (typeof ref === 'string' && isComponentInteriorSchemaRef(ref)) {
       const target = resolveToComponent(ref);
       if (target) {
         obj['$ref'] = target;
@@ -243,18 +268,16 @@ export function collapseComponentInteriorRefs(root: Record<string, unknown>): {
       }
     }
     for (const [k, v] of Object.entries(obj)) {
-      const childAt = `${at}/${k.replace(/~/g, '~0').replace(/\//g, '~1')}`;
-      if (isMap) {
-        stack.push({ node: v, at: childAt, kind: kind === 'exampleMap' ? 'exampleObject' : 'object' });
-        continue;
+      if (k === '$ref' || k.startsWith('x-') || LITERAL_PAYLOAD_KEYS.has(k)) continue;
+      if (LITERAL_KEYS_BY_KIND[kind].has(k)) continue;
+      // Schema-level `examples` is an array of literal instances.
+      if (k === 'examples' && Array.isArray(v)) continue;
+      const childAt = `${at}/${escapePointerSegment(k)}`;
+      if (NAME_MAP_KEYS.has(k) && !Array.isArray(v)) {
+        stack.push({ node: v, at: childAt, kind: 'nameMap', entryKind: MAP_ENTRY_KIND[k] ?? 'object' });
+      } else {
+        stack.push({ node: v, at: childAt, kind: 'object' });
       }
-      if (k === '$ref' || LITERAL_PAYLOAD_KEYS.has(k)) continue;
-      if (kind === 'exampleObject' && k === 'value') continue;
-      if (k === 'examples') {
-        if (!Array.isArray(v)) stack.push({ node: v, at: childAt, kind: 'exampleMap' });
-        continue;
-      }
-      stack.push({ node: v, at: childAt, kind: NAME_MAP_KEYS.has(k) ? 'nameMap' : 'object' });
     }
   }
   unresolved.sort();
