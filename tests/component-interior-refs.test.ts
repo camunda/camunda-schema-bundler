@@ -441,3 +441,73 @@ describe('collapseComponentInteriorRefs — Link Objects and extensions', () => 
     expect(spec.components.requestBodies.B.content['application/json'].schema).toEqual(base);
   });
 });
+
+describe('collapseComponentInteriorRefs — extensions on map objects', () => {
+  const RESOLVABLE = '#/components/schemas/Wrapper/properties/inner';
+  const UNRESOLVED = '#/components/schemas/Opaque/properties/inner';
+  const BASE = { $ref: '#/components/schemas/Base' };
+
+  function doc(): Record<string, any> {
+    return {
+      paths: {},
+      components: {
+        schemas: {
+          Base: { type: 'object', properties: { id: { type: 'string' } } },
+          Wrapper: {
+            type: 'object',
+            properties: { inner: { $ref: '#/components/schemas/Base' } },
+          },
+          Opaque: {
+            type: 'object',
+            properties: { inner: { type: 'object', properties: { x: { type: 'string' } } } },
+          },
+        },
+      },
+    };
+  }
+
+  // The Paths Object and an operation's Responses Object are maps that also
+  // allow `x-` extensions alongside their entries.
+  it.each([RESOLVABLE, UNRESOLVED])(
+    'leaves $ref values in Paths and Responses extensions untouched (%s)',
+    (target) => {
+      const spec = doc();
+      spec.paths = {
+        'x-vendor': { $ref: target },
+        '/h': {
+          get: {
+            responses: {
+              '200': { description: 'OK' },
+              'x-vendor': { $ref: target },
+            },
+          },
+        },
+      };
+      const before = JSON.stringify(spec.paths);
+
+      expect(collapseComponentInteriorRefs(spec)).toEqual({ collapsed: 0, unresolved: [] });
+      expect(JSON.stringify(spec.paths)).toBe(before);
+    }
+  );
+
+  // In pure name maps, `x-` is a legal name, not an extension.
+  it('still retargets refs under map entries whose name starts with x-', () => {
+    const spec = doc();
+    spec.components.schemas['x-Thing'] = { $ref: RESOLVABLE };
+    spec.components.schemas.Holder = {
+      type: 'object',
+      properties: { 'x-field': { $ref: RESOLVABLE } },
+    };
+    spec.components.responses = {
+      'x-Resp': {
+        description: 'OK',
+        content: { 'application/json': { schema: { $ref: RESOLVABLE } } },
+      },
+    };
+
+    expect(collapseComponentInteriorRefs(spec)).toEqual({ collapsed: 3, unresolved: [] });
+    expect(spec.components.schemas['x-Thing']).toEqual(BASE);
+    expect(spec.components.schemas.Holder.properties['x-field']).toEqual(BASE);
+    expect(spec.components.responses['x-Resp'].content['application/json'].schema).toEqual(BASE);
+  });
+});

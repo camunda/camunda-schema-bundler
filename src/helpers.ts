@@ -190,6 +190,15 @@ function escapePointerSegment(segment: string): string {
 }
 
 /**
+ * True for maps that also allow `x-` extensions beside their entries: the
+ * Paths Object and an operation's Responses Object. In every other name map
+ * (including `components.responses`), `x-` is a legal entry name.
+ */
+function isExtensibleMap(key: string, parentPointer: string): boolean {
+  return key === 'paths' || (key === 'responses' && parentPointer !== '#/components');
+}
+
+/**
  * Retarget every `$ref` that points inside a component schema to the named
  * component it ultimately resolves to.
  *
@@ -238,12 +247,18 @@ export function collapseComponentInteriorRefs(root: Record<string, unknown>): {
 
   let collapsed = 0;
   const unresolved: string[] = [];
-  const stack: { node: unknown; at: string; kind: WalkKind; entryKind?: ObjectKind }[] = [
+  const stack: {
+    node: unknown;
+    at: string;
+    kind: WalkKind;
+    entryKind?: ObjectKind;
+    extensible?: boolean;
+  }[] = [
     { node: root, at: '#', kind: 'object' },
   ];
   const seen = new Set<unknown>();
   while (stack.length) {
-    const { node, at, kind, entryKind = 'object' } = stack.pop()!;
+    const { node, at, kind, entryKind = 'object', extensible = false } = stack.pop()!;
     if (!node || typeof node !== 'object' || seen.has(node)) continue;
     seen.add(node);
     if (Array.isArray(node)) {
@@ -253,6 +268,7 @@ export function collapseComponentInteriorRefs(root: Record<string, unknown>): {
     const obj = node as Record<string, unknown>;
     if (kind === 'nameMap') {
       for (const [k, v] of Object.entries(obj)) {
+        if (extensible && k.startsWith('x-')) continue;
         stack.push({ node: v, at: `${at}/${escapePointerSegment(k)}`, kind: entryKind });
       }
       continue;
@@ -274,7 +290,13 @@ export function collapseComponentInteriorRefs(root: Record<string, unknown>): {
       if (k === 'examples' && Array.isArray(v)) continue;
       const childAt = `${at}/${escapePointerSegment(k)}`;
       if (NAME_MAP_KEYS.has(k) && !Array.isArray(v)) {
-        stack.push({ node: v, at: childAt, kind: 'nameMap', entryKind: MAP_ENTRY_KIND[k] ?? 'object' });
+        stack.push({
+          node: v,
+          at: childAt,
+          kind: 'nameMap',
+          entryKind: MAP_ENTRY_KIND[k] ?? 'object',
+          extensible: isExtensibleMap(k, at),
+        });
       } else {
         stack.push({ node: v, at: childAt, kind: 'object' });
       }
