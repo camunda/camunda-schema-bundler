@@ -2,7 +2,7 @@ import { describe, it, expect, beforeAll } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { bundle } from '../src/bundle.js';
+import { bundle, collapseComponentSubtreeRefs } from '../src/bundle.js';
 
 /**
  * Regression test for `$ref`s that point *into* a component schema's subtree.
@@ -123,6 +123,76 @@ components:
         ).toEqual({ $ref: '#/components/schemas/CamundaUserResult' });
         expect(spec.components.schemas.CamundaUserResult).toBeDefined();
       });
+    });
+  }
+
+  it('collapses subtree refs reintroduced by path-local dereferencing', async () => {
+    // A second path reusing the same path item is emitted as a `#/paths/...`
+    // ref; Step 4 copies it from a snapshot taken before the collapse pass.
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bundler-subtree-deref-'));
+    for (const f of ['authentication.yaml', 'rest-api.yaml']) {
+      fs.copyFileSync(path.join(specDir, f), path.join(dir, f));
+    }
+    const rest = fs
+      .readFileSync(path.join(dir, 'rest-api.yaml'), 'utf8')
+      .replace(
+        'components:',
+        "  /authentication/me2:\n    $ref: 'authentication.yaml#/paths/~1authentication~1me'\ncomponents:"
+      );
+    fs.writeFileSync(path.join(dir, 'rest-api.yaml'), rest, 'utf8');
+
+    const result = await bundle({ specDir: dir, dereferencePathLocalRefs: true });
+    const refs: string[] = [];
+    collectRefs(result.spec, '#', refs);
+    expect(refs.filter((r) => /-> #\/components\/[^/]+\/[^/]+\/./.test(r))).toEqual([]);
+    const spec = result.spec as Record<string, any>;
+    for (const p of ['/authentication/me', '/authentication/me2']) {
+      expect(
+        spec.paths[p].get.responses['200'].content['application/json'].schema
+      ).toEqual({ $ref: '#/components/schemas/CamundaUserResult' });
+    }
+  });
+});
+
+describe('collapseComponentSubtreeRefs', () => {
+  const schemaAt = (ref: string, extra: Record<string, unknown> = {}) => ({
+    paths: {
+      '/a': { get: { responses: { '200': { content: { 'application/json': { schema: { $ref: ref } } } } } } },
+      '/b': { get: { responses: { '200': { content: { 'application/json': { schema: { type: 'object' } } } } } } },
+    },
+    components: {
+      schemas: {
+        Named: { type: 'object' },
+        Wrapper: { allOf: [{ $ref: '#/components/schemas/Named' }] },
+        ...extra,
+      },
+    },
+  });
+
+  it('rewrites a subtree ref to the named component it resolves to', () => {
+    const doc = schemaAt('#/components/schemas/Wrapper/allOf/0');
+    expect(collapseComponentSubtreeRefs(doc)).toBe(1);
+    expect(
+      (doc.paths['/a'].get.responses['200'].content['application/json'].schema as any).$ref
+    ).toBe('#/components/schemas/Named');
+  });
+
+  for (const [label, ref, extra] of [
+    ['an unnamed #/paths/ schema', '#/components/schemas/ToPath/allOf/0', {
+      ToPath: { allOf: [{ $ref: '#/paths/~1b/get/responses/200/content/application~1json/schema' }] },
+    }],
+    ['a missing component', '#/components/schemas/ToMissing/allOf/0', {
+      ToMissing: { allOf: [{ $ref: '#/components/schemas/DoesNotExist' }] },
+    }],
+    ['a non-$ref subtree', '#/components/schemas/Wrapper/allOf', {}],
+    ['a $ref cycle', '#/components/schemas/Loop/allOf/0', {
+      Loop: { allOf: [{ $ref: '#/components/schemas/Loop/allOf/0' }] },
+    }],
+  ] as const) {
+    it(`throws when the chain ends at ${label}`, () => {
+      expect(() => collapseComponentSubtreeRefs(schemaAt(ref, extra))).toThrow(
+        /point inside a component schema/
+      );
     });
   }
 });
