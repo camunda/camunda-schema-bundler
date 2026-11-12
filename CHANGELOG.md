@@ -1,3 +1,10 @@
+## [2.4.7](https://github.com/camunda/camunda-schema-bundler/compare/v2.4.6...v2.4.7) (2026-11-12)
+
+
+### Bug Fixes
+
+* collapse $refs that point into a component subtree ([#42](https://github.com/camunda/camunda-schema-bundler/issues/42)) ([27a45d6](https://github.com/camunda/camunda-schema-bundler/commit/27a45d6200caa211a62e36691575fb4643fece4c))
+
 ## [2.4.6](https://github.com/camunda/camunda-schema-bundler/compare/v2.4.5...v2.4.6) (2026-11-10)
 
 
