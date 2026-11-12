@@ -228,6 +228,66 @@ describe('collapseComponentSubtreeRefs', () => {
       });
     }
 
+    // Maps keyed by user-chosen names: an entry named like a literal keyword
+    // is still an OpenAPI object and must be collapsed / validated.
+    const realRef = () => ({ $ref: '#/components/schemas/Wrapper/allOf/0' });
+    const namedEntries: Array<[string, (doc: any, schema: object) => void]> = [
+      ['response named default', (doc, schema) => {
+        doc.paths['/b'].get.responses.default = { description: 'd', content: { 'application/json': { schema } } };
+      }],
+      ['component schema named default', (doc, schema) => (doc.components.schemas.default = { allOf: [schema] })],
+      ['component schema named x-data', (doc, schema) => (doc.components.schemas['x-data'] = { allOf: [schema] })],
+      ['component response named default', (doc, schema) => {
+        doc.components.responses = { default: { description: 'd', content: { 'application/json': { schema } } } };
+      }],
+      ['media type in content map named example', (doc, schema) => {
+        doc.paths['/b'].get.responses['200'].content.example = { schema };
+      }],
+    ];
+    for (const [label, place] of namedEntries) {
+      it(`still collapses a real ref in a ${label}`, () => {
+        const doc = schemaAt('#/components/schemas/Named') as any;
+        const schema = realRef();
+        place(doc, schema);
+        expect(collapseComponentSubtreeRefs(doc)).toBe(1);
+        expect(schema.$ref).toBe('#/components/schemas/Named');
+      });
+      it(`still throws on a dangling ref in a ${label}`, () => {
+        const doc = schemaAt('#/components/schemas/Named') as any;
+        place(doc, { $ref: '#/components/schemas/Wrapper/allOf' });
+        expect(() => collapseComponentSubtreeRefs(doc)).toThrow(/point inside a component schema/);
+      });
+    }
+
+    const dataPositions: Array<[string, (doc: any) => unknown]> = [
+      ['response-map extension', (doc) => (doc.paths['/b'].get.responses['x-data'] = { ...literal })],
+      ['paths extension', (doc) => (doc.paths['x-data'] = { ...literal })],
+      ['components extension', (doc) => (doc.components['x-data'] = { ...literal })],
+      ['Link Object requestBody', (doc) => {
+        const v = { ...literal };
+        doc.paths['/b'].get.responses['200'].links = { l: { operationId: 'x', requestBody: v } };
+        return v;
+      }],
+      ['Link Object parameters', (doc) => {
+        const v = { ...literal };
+        doc.paths['/b'].get.responses['200'].links = { l: { operationId: 'x', parameters: { p: v } } };
+        return v;
+      }],
+      ['component Link requestBody', (doc) => {
+        const v = { ...literal };
+        doc.components.links = { L: { operationId: 'x', requestBody: v } };
+        return v;
+      }],
+    ];
+    for (const [label, place] of dataPositions) {
+      it(`leaves a ${label} untouched`, () => {
+        const doc = schemaAt('#/components/schemas/Named') as any;
+        const v = place(doc) as Record<string, unknown>;
+        expect(collapseComponentSubtreeRefs(doc)).toBe(0);
+        expect(v).toEqual(literal);
+      });
+    }
+
     it('still collapses a real ref next to an examples map', () => {
       const doc = schemaAt('#/components/schemas/Wrapper/allOf/0') as any;
       const mt = doc.paths['/a'].get.responses['200'].content['application/json'];

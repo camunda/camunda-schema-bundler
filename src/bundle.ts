@@ -733,36 +733,56 @@ export function collapseComponentSubtreeRefs(doc: Record<string, unknown>): numb
 
   const survivors: string[] = [];
   const seen = new Set<unknown>();
-  // `exampleMap`: node is an `examples` map of Example Objects;
-  // `exampleObject`: node is an Example Object, whose `value` is literal.
-  // `nameMap`: node is a user-named map of schemas (`properties`, ...), so
-  // its keys are names, never literal-payload keywords.
-  const NAME_MAP_KEYS = new Set(['properties', 'patternProperties', '$defs', 'definitions']);
-  const stack: Array<{
-    node: unknown;
-    exampleMap: boolean;
-    exampleObject?: boolean;
-    nameMap?: boolean;
-  }> = [
-    { node: doc, exampleMap: false },
+  // Traversal context of a node. Key-based literal skipping only applies in
+  // `node` context; maps whose keys are user-chosen names (component maps,
+  // `responses`, `properties`, ...) are entered in a map context so that an
+  // entry named `default`, `enum` or `x-data` is still visited as an
+  // OpenAPI/schema object.
+  //  - `node`: an OpenAPI/schema object.
+  //  - `nameMap`: every key is a name; every value is a node.
+  //  - `nameMapExt`: like `nameMap`, but `x-*` keys are extensions (data).
+  //  - `exampleMap` / `exampleObject`: Example Objects, whose `value` is literal.
+  //  - `linkMap` / `linkObject`: Link Objects, whose `requestBody` and
+  //    `parameters` hold literal values / runtime expressions.
+  type Ctx = 'node' | 'nameMap' | 'nameMapExt' | 'exampleMap' | 'exampleObject' | 'linkMap' | 'linkObject';
+  // Keys (in `node` context) whose value is a map of user-chosen names.
+  const NAME_MAP_KEYS = new Set([
+    'properties',
+    'patternProperties',
+    '$defs',
+    'definitions',
+    'dependentSchemas',
+    'content',
+    'headers',
+    'encoding',
+  ]);
+  // Keys whose value is a name map that also admits `x-*` extensions.
+  const NAME_MAP_EXT_KEYS = new Set(['responses', 'paths', 'webhooks', 'callbacks']);
+  const childCtx = (k: string, v: unknown): Ctx | undefined => {
+    if (k === 'examples') return Array.isArray(v) ? undefined : 'exampleMap';
+    if (k === 'links') return 'linkMap';
+    if (NAME_MAP_KEYS.has(k)) return 'nameMap';
+    if (NAME_MAP_EXT_KEYS.has(k)) return 'nameMapExt';
+    return 'node';
+  };
+  const stack: Array<{ node: unknown; ctx: Ctx }> = [
+    { node: doc, ctx: 'node' },
   ];
   while (stack.length) {
-    const { node, exampleMap, exampleObject, nameMap } = stack.pop()!;
+    const { node, ctx } = stack.pop()!;
     if (!node || typeof node !== 'object' || seen.has(node)) continue;
     seen.add(node);
     if (Array.isArray(node)) {
-      for (const v of node) stack.push({ node: v, exampleMap: false });
+      for (const v of node) stack.push({ node: v, ctx: 'node' });
       continue;
     }
     const obj = node as Record<string, unknown>;
-    if (nameMap) {
-      for (const v of Object.values(obj)) stack.push({ node: v, exampleMap: false });
-      continue;
-    }
-    if (exampleMap) {
-      // Each entry is an Example Object (or a Reference Object to one).
-      for (const entry of Object.values(obj)) {
-        stack.push({ node: entry, exampleMap: false, exampleObject: true });
+    if (ctx === 'nameMap' || ctx === 'nameMapExt' || ctx === 'exampleMap' || ctx === 'linkMap') {
+      const entryCtx: Ctx =
+        ctx === 'exampleMap' ? 'exampleObject' : ctx === 'linkMap' ? 'linkObject' : 'node';
+      for (const [k, v] of Object.entries(obj)) {
+        if (ctx !== 'nameMap' && k.startsWith('x-')) continue;
+        stack.push({ node: v, ctx: entryCtx });
       }
       continue;
     }
@@ -797,18 +817,22 @@ export function collapseComponentSubtreeRefs(doc: Record<string, unknown>): numb
       }
     }
     for (const [k, v] of Object.entries(obj)) {
-      if (k === '$ref' || isLiteralKey(k) || (exampleObject && k === 'value')) continue;
-      if (NAME_MAP_KEYS.has(k)) {
-        stack.push({ node: v, exampleMap: false, nameMap: true });
+      if (k === '$ref' || isLiteralKey(k)) continue;
+      if (ctx === 'exampleObject' && k === 'value') continue;
+      if (ctx === 'linkObject' && (k === 'requestBody' || k === 'parameters')) continue;
+      if (obj === doc && k === 'components' && v && typeof v === 'object') {
+        // Each component type map holds user-named components (any name,
+        // including `default` / `x-data`); `x-*` on `components` itself is data.
+        for (const [type, map] of Object.entries(v as Record<string, unknown>)) {
+          if (type.startsWith('x-')) continue;
+          const mapCtx: Ctx =
+            type === 'examples' ? 'exampleMap' : type === 'links' ? 'linkMap' : 'nameMap';
+          stack.push({ node: map, ctx: mapCtx });
+        }
         continue;
       }
-      if (k === 'examples') {
-        // Schema `examples` (array) is literal data; a media-type/parameter
-        // `examples` map holds Example Objects whose `value` is literal.
-        if (!Array.isArray(v)) stack.push({ node: v, exampleMap: true });
-        continue;
-      }
-      stack.push({ node: v, exampleMap: false });
+      const c = childCtx(k, v);
+      if (c !== undefined) stack.push({ node: v, ctx: c });
     }
   }
 
