@@ -311,6 +311,12 @@ async function main(): Promise<void> {
     );
   }
 
+  if (result.stats.componentSubtreeRefsCollapsed > 0) {
+    console.log(
+      `[camunda-schema-bundler] Collapsed ${result.stats.componentSubtreeRefsCollapsed} $refs pointing into component subtrees`
+    );
+  }
+
   console.log(
     `[camunda-schema-bundler] Metadata: ` +
       `semanticKeys=${result.metadata.integrity.totalSemanticKeys}, ` +
