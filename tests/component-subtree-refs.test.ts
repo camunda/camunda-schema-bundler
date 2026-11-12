@@ -195,4 +195,45 @@ describe('collapseComponentSubtreeRefs', () => {
       );
     });
   }
+
+  describe('leaves $ref-like literal payloads untouched', () => {
+    // Non-bare target: collapsing would throw if these were treated as refs.
+    const literal = { $ref: '#/components/schemas/Wrapper/allOf' };
+    const positions: Array<[string, (mt: Record<string, any>) => void, (mt: Record<string, any>) => unknown]> = [
+      ['media type example', (mt) => (mt.example = literal), (mt) => mt.example],
+      ['Example Object value', (mt) => (mt.examples = { e: { value: literal } }), (mt) => mt.examples.e.value],
+      ['schema default', (mt) => (mt.schema.default = literal), (mt) => mt.schema.default],
+      ['schema enum', (mt) => (mt.schema.enum = [literal]), (mt) => mt.schema.enum[0]],
+      ['schema const', (mt) => (mt.schema.const = literal), (mt) => mt.schema.const],
+      ['schema examples array', (mt) => (mt.schema.examples = [literal]), (mt) => mt.schema.examples[0]],
+      ['extension', (mt) => (mt['x-data'] = literal), (mt) => mt['x-data']],
+    ];
+    for (const [label, set, get] of positions) {
+      it(label, () => {
+        const doc = schemaAt('#/components/schemas/Named') as any;
+        const mt = doc.paths['/b'].get.responses['200'].content['application/json'];
+        set(mt);
+        expect(collapseComponentSubtreeRefs(doc)).toBe(0);
+        expect(get(mt)).toEqual({ $ref: '#/components/schemas/Wrapper/allOf' });
+      });
+    }
+
+    for (const name of ['default', 'enum', 'const', 'example', 'examples', 'x-data']) {
+      it(`still collapses a real ref in a property named ${name}`, () => {
+        const doc = schemaAt('#/components/schemas/Named') as any;
+        const prop = { $ref: '#/components/schemas/Wrapper/allOf/0' };
+        doc.components.schemas.Holder = { type: 'object', properties: { [name]: prop } };
+        expect(collapseComponentSubtreeRefs(doc)).toBe(1);
+        expect(prop.$ref).toBe('#/components/schemas/Named');
+      });
+    }
+
+    it('still collapses a real ref next to an examples map', () => {
+      const doc = schemaAt('#/components/schemas/Wrapper/allOf/0') as any;
+      const mt = doc.paths['/a'].get.responses['200'].content['application/json'];
+      mt.examples = { e: { value: literal } };
+      expect(collapseComponentSubtreeRefs(doc)).toBe(1);
+      expect(mt.schema.$ref).toBe('#/components/schemas/Named');
+    });
+  });
 });

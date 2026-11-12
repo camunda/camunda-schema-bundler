@@ -726,18 +726,46 @@ export function collapseComponentSubtreeRefs(doc: Record<string, unknown>): numb
     return keys.length === 1 && typeof next === 'string' ? next : undefined;
   };
 
+  // Keys whose values are literal payloads (data, not OpenAPI/schema
+  // positions): a `$ref` property inside them is data and must not be touched.
+  const LITERAL_KEYS = new Set(['example', 'default', 'enum', 'const']);
+  const isLiteralKey = (k: string): boolean => LITERAL_KEYS.has(k) || k.startsWith('x-');
+
   const survivors: string[] = [];
   const seen = new Set<unknown>();
-  const stack: unknown[] = [doc];
+  // `exampleMap`: node is an `examples` map of Example Objects;
+  // `exampleObject`: node is an Example Object, whose `value` is literal.
+  // `nameMap`: node is a user-named map of schemas (`properties`, ...), so
+  // its keys are names, never literal-payload keywords.
+  const NAME_MAP_KEYS = new Set(['properties', 'patternProperties', '$defs', 'definitions']);
+  const stack: Array<{
+    node: unknown;
+    exampleMap: boolean;
+    exampleObject?: boolean;
+    nameMap?: boolean;
+  }> = [
+    { node: doc, exampleMap: false },
+  ];
   while (stack.length) {
-    const node = stack.pop();
+    const { node, exampleMap, exampleObject, nameMap } = stack.pop()!;
     if (!node || typeof node !== 'object' || seen.has(node)) continue;
     seen.add(node);
     if (Array.isArray(node)) {
-      stack.push(...node);
+      for (const v of node) stack.push({ node: v, exampleMap: false });
       continue;
     }
     const obj = node as Record<string, unknown>;
+    if (nameMap) {
+      for (const v of Object.values(obj)) stack.push({ node: v, exampleMap: false });
+      continue;
+    }
+    if (exampleMap) {
+      // Each entry is an Example Object (or a Reference Object to one).
+      for (const entry of Object.values(obj)) {
+        stack.push({ node: entry, exampleMap: false, exampleObject: true });
+      }
+      continue;
+    }
     const ref = obj['$ref'];
     if (typeof ref === 'string' && isComponentSubtreeRef(ref)) {
       let resolved: string = ref;
@@ -768,7 +796,20 @@ export function collapseComponentSubtreeRefs(doc: Record<string, unknown>): numb
         collapsed++;
       }
     }
-    for (const [k, v] of Object.entries(obj)) if (k !== '$ref') stack.push(v);
+    for (const [k, v] of Object.entries(obj)) {
+      if (k === '$ref' || isLiteralKey(k) || (exampleObject && k === 'value')) continue;
+      if (NAME_MAP_KEYS.has(k)) {
+        stack.push({ node: v, exampleMap: false, nameMap: true });
+        continue;
+      }
+      if (k === 'examples') {
+        // Schema `examples` (array) is literal data; a media-type/parameter
+        // `examples` map holds Example Objects whose `value` is literal.
+        if (!Array.isArray(v)) stack.push({ node: v, exampleMap: true });
+        continue;
+      }
+      stack.push({ node: v, exampleMap: false });
+    }
   }
 
   if (survivors.length > 0) {
