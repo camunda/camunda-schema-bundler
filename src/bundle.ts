@@ -709,6 +709,152 @@ function isMonolithicEntryFile(entryPath: string): boolean {
 }
 
 /**
+ * Collapse `$ref`s that point into a component subtree (see Step 4d).
+ * Rewrites in place and returns the number of collapsed refs plus the refs
+ * that survive: subtree refs that do not resolve, through bare `$ref` hops,
+ * to an existing named top-level component. The caller decides whether
+ * survivors are fatal (see `allowComponentInteriorRefs`).
+ */
+export function collapseComponentSubtreeRefs(doc: Record<string, unknown>): {
+  collapsed: number;
+  survivors: string[];
+} {
+  let collapsed = 0;
+  const isComponentSubtreeRef = (ref: string): boolean =>
+    /^#\/components\/[^/]+\/[^/]+\/./.test(ref);
+  const bareRefTarget = (ref: string): string | undefined => {
+    const target = resolveInternalRef(doc, ref);
+    if (!target || typeof target !== 'object' || Array.isArray(target)) return undefined;
+    const keys = Object.keys(target as Record<string, unknown>);
+    const next = (target as Record<string, unknown>)['$ref'];
+    return keys.length === 1 && typeof next === 'string' ? next : undefined;
+  };
+
+  // Keys whose values are literal payloads (data, not OpenAPI/schema
+  // positions): a `$ref` property inside them is data and must not be touched.
+  const LITERAL_KEYS = new Set(['example', 'default', 'enum', 'const']);
+  const isLiteralKey = (k: string): boolean => LITERAL_KEYS.has(k) || k.startsWith('x-');
+
+  const survivors: string[] = [];
+  const seen = new Set<unknown>();
+  // Traversal context of a node. Key-based literal skipping only applies in
+  // `node` context; maps whose keys are user-chosen names (component maps,
+  // `responses`, `properties`, ...) are entered in a map context so that an
+  // entry named `default`, `enum` or `x-data` is still visited as an
+  // OpenAPI/schema object.
+  //  - `node`: an OpenAPI/schema object.
+  //  - `nameMap`: every key is a name; every value is a node.
+  //  - `nameMapExt`: like `nameMap`, but `x-*` keys are extensions (data).
+  //    Only these maps reserve `x-*` for extensions; in Example/Link maps an
+  //    `x-*` key is just a user-chosen name for a real Example/Link Object
+  //    (or a Reference to one), so it is still collapsed / validated.
+  //  - `exampleMap` / `exampleObject`: Example Objects, whose `value` is literal.
+  //  - `linkMap` / `linkObject`: Link Objects, whose `requestBody` and
+  //    `parameters` hold literal values / runtime expressions.
+  type Ctx = 'node' | 'nameMap' | 'nameMapExt' | 'exampleMap' | 'exampleObject' | 'linkMap' | 'linkObject';
+  // Keys (in `node` context) whose value is a map of user-chosen names.
+  const NAME_MAP_KEYS = new Set([
+    'properties',
+    'patternProperties',
+    '$defs',
+    'definitions',
+    'dependentSchemas',
+    'content',
+    'headers',
+    'encoding',
+  ]);
+  // Keys whose value is a name map that also admits `x-*` extensions.
+  const NAME_MAP_EXT_KEYS = new Set(['responses', 'paths', 'webhooks', 'callbacks']);
+  const childCtx = (k: string, v: unknown): Ctx | undefined => {
+    if (k === 'examples') return Array.isArray(v) ? undefined : 'exampleMap';
+    if (k === 'links') return 'linkMap';
+    if (NAME_MAP_KEYS.has(k)) return 'nameMap';
+    if (NAME_MAP_EXT_KEYS.has(k)) return 'nameMapExt';
+    return 'node';
+  };
+  const stack: Array<{ node: unknown; ctx: Ctx }> = [
+    { node: doc, ctx: 'node' },
+  ];
+  while (stack.length) {
+    const { node, ctx } = stack.pop()!;
+    if (!node || typeof node !== 'object' || seen.has(node)) continue;
+    seen.add(node);
+    if (Array.isArray(node)) {
+      for (const v of node) stack.push({ node: v, ctx: 'node' });
+      continue;
+    }
+    const obj = node as Record<string, unknown>;
+    if (ctx === 'nameMap' || ctx === 'nameMapExt' || ctx === 'exampleMap' || ctx === 'linkMap') {
+      const entryCtx: Ctx =
+        ctx === 'exampleMap' ? 'exampleObject' : ctx === 'linkMap' ? 'linkObject' : 'node';
+      for (const [k, v] of Object.entries(obj)) {
+        if (ctx === 'nameMapExt' && k.startsWith('x-')) continue;
+        stack.push({ node: v, ctx: entryCtx });
+      }
+      continue;
+    }
+    const ref = obj['$ref'];
+    if (typeof ref === 'string' && isComponentSubtreeRef(ref)) {
+      let resolved: string = ref;
+      const chain = new Set<string>();
+      // Follow bare internal refs (including path-local intermediaries such
+      // as `#/paths/...`) until a named top-level component is reached, or
+      // the chain hits a non-bare/missing target or a cycle.
+      const isNamedComponentRef = (r: string): boolean =>
+        /^#\/components\/[^/]+\/[^/]+$/.test(r);
+      while (resolved.startsWith('#/') && !isNamedComponentRef(resolved)) {
+        if (chain.has(resolved)) break;
+        chain.add(resolved);
+        const next = bareRefTarget(resolved);
+        if (next === undefined) break;
+        resolved = next;
+      }
+      // Accept only a ref to an existing, named top-level component.
+      // Leaving the subtree pattern is not enough: the chain could end
+      // at e.g. an unnamed `#/paths/...` schema.
+      const named = /^#\/components\/([^/]+)\/([^/]+)$/.exec(resolved);
+      const components = (doc as Record<string, any>).components;
+      const namedTargetExists =
+        named !== null &&
+        components?.[named[1]] !== undefined &&
+        Object.prototype.hasOwnProperty.call(
+          components[named[1]],
+          named[2].replace(/~1/g, '/').replace(/~0/g, '~')
+        );
+      if (!namedTargetExists) {
+        survivors.push(ref);
+      } else {
+        obj['$ref'] = resolved;
+        collapsed++;
+      }
+    }
+    for (const [k, v] of Object.entries(obj)) {
+      if (k === '$ref' || isLiteralKey(k)) continue;
+      if (ctx === 'exampleObject' && k === 'value') continue;
+      if (ctx === 'linkObject' && (k === 'requestBody' || k === 'parameters')) continue;
+      if (obj === doc && k === 'components' && v && typeof v === 'object') {
+        // Each component type map holds user-named components (any name,
+        // including `default` / `x-data`); `x-*` on `components` itself is data.
+        for (const [type, map] of Object.entries(v as Record<string, unknown>)) {
+          if (type.startsWith('x-')) continue;
+          const mapCtx: Ctx =
+            type === 'examples' ? 'exampleMap' : type === 'links' ? 'linkMap' : 'nameMap';
+          stack.push({ node: map, ctx: mapCtx });
+        }
+        continue;
+      }
+      const c = childCtx(k, v);
+      if (c !== undefined) stack.push({ node: v, ctx: c });
+    }
+  }
+
+  if (survivors.length > 0) {
+    return { collapsed, survivors: [...new Set(survivors)].sort() };
+  }
+  return { collapsed, survivors: [] };
+}
+
+/**
  * Bundle the multi-file OpenAPI spec into a single normalized JSON document.
  */
 export async function bundle(options: BundleOptions): Promise<BundleResult> {
@@ -734,6 +880,7 @@ export async function bundle(options: BundleOptions): Promise<BundleResult> {
     ambiguousInlineCount: 0,
     dereferencedPathLocalRefCount: 0,
     pathLocalLikeRefCount: 0,
+    componentSubtreeRefsCollapsed: 0,
     inlinedPathLocalParameterCount: 0,
     collapsedComponentInteriorRefCount: 0,
     componentInteriorRefCount: 0,
@@ -1200,6 +1347,42 @@ export async function bundle(options: BundleOptions): Promise<BundleResult> {
   const interior = collapseComponentInteriorRefs(bundled);
   stats.collapsedComponentInteriorRefCount = interior.collapsed;
   stats.componentInteriorRefCount = interior.unresolved.length;
+
+  // ── Step 4d: Collapse $refs that point into a component subtree ──────────
+  //
+  // When a named schema is first reached through another component's
+  // composition, `SwaggerParser.bundle()` emits every other use of it as a
+  // pointer into that component instead of a ref to the schema itself:
+  //
+  //   GET /authentication/me -> 200:
+  //     $ref: '#/components/schemas/AuthenticatedCamundaUserResult/allOf/0'
+  //
+  // where `allOf/0` is just `{ $ref: '#/components/schemas/CamundaUserResult' }`
+  // (camunda/camunda 1df63b8507). The pointer resolves, but generators name
+  // the target after the pointer: openapi-generator (PHP) emitted a
+  // non-existent `Model0` class. When the pointer lands on a bare `$ref`,
+  // the two are the same schema, so rewrite to the final target. This runs
+  // unconditionally: `--deref-path-local` only handles `#/paths/` refs.
+  // It runs after Step 4/4b because dereferencing copies subtrees from
+  // snapshots taken before this pass, which can reintroduce subtree refs.
+  //
+  // Step 4c already retargets `#/components/schemas/<name>/...` refs and
+  // reports the ones it cannot resolve; a survivor here is one of those
+  // (reported again, with the same wording) or a ref into a non-schema
+  // component subtree, which 4c does not see. Both fail the same way
+  // downstream, so they share the `allowComponentInteriorRefs` bypass.
+  const subtree = collapseComponentSubtreeRefs(bundled);
+  stats.componentSubtreeRefsCollapsed += subtree.collapsed;
+  if (subtree.survivors.length > 0 && !options.allowComponentInteriorRefs) {
+    throw new Error(
+      `${subtree.survivors.length} $ref(s) point inside a component schema and do not resolve ` +
+        `to a named schema:\n` +
+        subtree.survivors.map((r) => `  ${r}`).join('\n') +
+        `\n\nGenerators would name the target after the JSON pointer (e.g. \`Model0\`). ` +
+        `Fix: register the referenced schema as a named component upstream. ` +
+        `Set allowComponentInteriorRefs (CLI: --allow-interior-refs) to bypass.`
+    );
+  }
 
   // ── Step 5: Validate ──────────────────────────────────────────────────────
 
