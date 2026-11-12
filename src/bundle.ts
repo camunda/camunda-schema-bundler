@@ -797,7 +797,12 @@ export function collapseComponentSubtreeRefs(doc: Record<string, unknown>): {
     if (typeof ref === 'string' && isComponentSubtreeRef(ref)) {
       let resolved: string = ref;
       const chain = new Set<string>();
-      while (isComponentSubtreeRef(resolved)) {
+      // Follow bare internal refs (including path-local intermediaries such
+      // as `#/paths/...`) until a named top-level component is reached, or
+      // the chain hits a non-bare/missing target or a cycle.
+      const isNamedComponentRef = (r: string): boolean =>
+        /^#\/components\/[^/]+\/[^/]+$/.test(r);
+      while (resolved.startsWith('#/') && !isNamedComponentRef(resolved)) {
         if (chain.has(resolved)) break;
         chain.add(resolved);
         const next = bareRefTarget(resolved);

@@ -177,6 +177,33 @@ describe('collapseComponentSubtreeRefs', () => {
     ).toBe('#/components/schemas/Named');
   });
 
+  it('follows a bare #/paths/ intermediary to the named component', () => {
+    const doc: any = schemaAt('#/components/schemas/ViaPath/allOf/0', {
+      ViaPath: { allOf: [{ $ref: '#/paths/~1c/get/responses/200/content/application~1json/schema' }] },
+    });
+    doc.paths['/c'] = {
+      get: { responses: { '200': { content: { 'application/json': { schema: { $ref: '#/components/schemas/Named' } } } } } },
+    };
+    const { collapsed, survivors } = collapseComponentSubtreeRefs(doc);
+    expect(survivors).toEqual([]);
+    expect(collapsed).toBe(1);
+    expect(doc.paths['/a'].get.responses['200'].content['application/json'].schema.$ref).toBe(
+      '#/components/schemas/Named'
+    );
+  });
+
+  it('survives a cycle through a #/paths/ intermediary', () => {
+    const ref = '#/components/schemas/PathLoop/allOf/0';
+    const doc: any = schemaAt(ref, {
+      PathLoop: { allOf: [{ $ref: '#/paths/~1c/get/responses/200/content/application~1json/schema' }] },
+    });
+    doc.paths['/c'] = {
+      get: { responses: { '200': { content: { 'application/json': { schema: { $ref: ref } } } } } },
+    };
+    const { survivors } = collapseComponentSubtreeRefs(doc);
+    expect(survivors).toContain(ref);
+  });
+
   for (const [label, ref, extra] of [
     ['an unnamed #/paths/ schema', '#/components/schemas/ToPath/allOf/0', {
       ToPath: { allOf: [{ $ref: '#/paths/~1b/get/responses/200/content/application~1json/schema' }] },
