@@ -709,12 +709,16 @@ function isMonolithicEntryFile(entryPath: string): boolean {
 }
 
 /**
- * Collapse `$ref`s that point into a component subtree (see Step 4c).
- * Rewrites in place and returns the number of collapsed refs. Throws if any
- * such ref does not resolve, through bare `$ref` hops, to an existing named
- * top-level component.
+ * Collapse `$ref`s that point into a component subtree (see Step 4d).
+ * Rewrites in place and returns the number of collapsed refs plus the refs
+ * that survive: subtree refs that do not resolve, through bare `$ref` hops,
+ * to an existing named top-level component. The caller decides whether
+ * survivors are fatal (see `allowComponentInteriorRefs`).
  */
-export function collapseComponentSubtreeRefs(doc: Record<string, unknown>): number {
+export function collapseComponentSubtreeRefs(doc: Record<string, unknown>): {
+  collapsed: number;
+  survivors: string[];
+} {
   let collapsed = 0;
   const isComponentSubtreeRef = (ref: string): boolean =>
     /^#\/components\/[^/]+\/[^/]+\/./.test(ref);
@@ -840,15 +844,9 @@ export function collapseComponentSubtreeRefs(doc: Record<string, unknown>): numb
   }
 
   if (survivors.length > 0) {
-    throw new Error(
-      `${survivors.length} $ref(s) point inside a component schema and do not resolve ` +
-        `to a named schema:\n` +
-        [...new Set(survivors)].map((r) => `  ${r}`).join('\n') +
-        `\n\nGenerators would name the target after the JSON pointer (e.g. \`Model0\`). ` +
-        `Fix: register the referenced schema as a named component upstream.`
-    );
+    return { collapsed, survivors: [...new Set(survivors)].sort() };
   }
-  return collapsed;
+  return { collapsed, survivors: [] };
 }
 
 /**
@@ -1362,7 +1360,24 @@ export async function bundle(options: BundleOptions): Promise<BundleResult> {
   // unconditionally: `--deref-path-local` only handles `#/paths/` refs.
   // It runs after Step 4/4b because dereferencing copies subtrees from
   // snapshots taken before this pass, which can reintroduce subtree refs.
-  stats.componentSubtreeRefsCollapsed += collapseComponentSubtreeRefs(bundled);
+  //
+  // Step 4c already retargets `#/components/schemas/<name>/...` refs and
+  // reports the ones it cannot resolve; a survivor here is one of those
+  // (reported again, with the same wording) or a ref into a non-schema
+  // component subtree, which 4c does not see. Both fail the same way
+  // downstream, so they share the `allowComponentInteriorRefs` bypass.
+  const subtree = collapseComponentSubtreeRefs(bundled);
+  stats.componentSubtreeRefsCollapsed += subtree.collapsed;
+  if (subtree.survivors.length > 0 && !options.allowComponentInteriorRefs) {
+    throw new Error(
+      `${subtree.survivors.length} $ref(s) point inside a component schema and do not resolve ` +
+        `to a named schema:\n` +
+        subtree.survivors.map((r) => `  ${r}`).join('\n') +
+        `\n\nGenerators would name the target after the JSON pointer (e.g. \`Model0\`). ` +
+        `Fix: register the referenced schema as a named component upstream. ` +
+        `Set allowComponentInteriorRefs (CLI: --allow-interior-refs) to bypass.`
+    );
+  }
 
   // ── Step 5: Validate ──────────────────────────────────────────────────────
 

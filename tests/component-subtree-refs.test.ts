@@ -171,7 +171,7 @@ describe('collapseComponentSubtreeRefs', () => {
 
   it('rewrites a subtree ref to the named component it resolves to', () => {
     const doc = schemaAt('#/components/schemas/Wrapper/allOf/0');
-    expect(collapseComponentSubtreeRefs(doc)).toBe(1);
+    expect(collapseComponentSubtreeRefs(doc).collapsed).toBe(1);
     expect(
       (doc.paths['/a'].get.responses['200'].content['application/json'].schema as any).$ref
     ).toBe('#/components/schemas/Named');
@@ -189,10 +189,10 @@ describe('collapseComponentSubtreeRefs', () => {
       Loop: { allOf: [{ $ref: '#/components/schemas/Loop/allOf/0' }] },
     }],
   ] as const) {
-    it(`throws when the chain ends at ${label}`, () => {
-      expect(() => collapseComponentSubtreeRefs(schemaAt(ref, extra))).toThrow(
-        /point inside a component schema/
-      );
+    it(`survives when the chain ends at ${label}`, () => {
+      const { collapsed, survivors } = collapseComponentSubtreeRefs(schemaAt(ref, extra));
+      expect(collapsed).toBe(0);
+      expect(survivors).toEqual([ref]);
     });
   }
 
@@ -213,7 +213,7 @@ describe('collapseComponentSubtreeRefs', () => {
         const doc = schemaAt('#/components/schemas/Named') as any;
         const mt = doc.paths['/b'].get.responses['200'].content['application/json'];
         set(mt);
-        expect(collapseComponentSubtreeRefs(doc)).toBe(0);
+        expect(collapseComponentSubtreeRefs(doc).collapsed).toBe(0);
         expect(get(mt)).toEqual({ $ref: '#/components/schemas/Wrapper/allOf' });
       });
     }
@@ -223,7 +223,7 @@ describe('collapseComponentSubtreeRefs', () => {
         const doc = schemaAt('#/components/schemas/Named') as any;
         const prop = { $ref: '#/components/schemas/Wrapper/allOf/0' };
         doc.components.schemas.Holder = { type: 'object', properties: { [name]: prop } };
-        expect(collapseComponentSubtreeRefs(doc)).toBe(1);
+        expect(collapseComponentSubtreeRefs(doc).collapsed).toBe(1);
         expect(prop.$ref).toBe('#/components/schemas/Named');
       });
     }
@@ -273,13 +273,14 @@ describe('collapseComponentSubtreeRefs', () => {
         const doc = schemaAt('#/components/schemas/Named') as any;
         const schema = realRef();
         place(doc, schema);
-        expect(collapseComponentSubtreeRefs(doc)).toBe(1);
+        expect(collapseComponentSubtreeRefs(doc).collapsed).toBe(1);
         expect(schema.$ref).toBe('#/components/schemas/Named');
       });
-      it(`still throws on a dangling ref in a ${label}`, () => {
+      it(`still reports a dangling ref in a ${label}`, () => {
         const doc = schemaAt('#/components/schemas/Named') as any;
         place(doc, { $ref: '#/components/schemas/Wrapper/allOf' });
-        expect(() => collapseComponentSubtreeRefs(doc)).toThrow(/point inside a component schema/);
+        const { survivors } = collapseComponentSubtreeRefs(doc);
+        expect(survivors).toEqual(['#/components/schemas/Wrapper/allOf']);
       });
     }
 
@@ -307,7 +308,7 @@ describe('collapseComponentSubtreeRefs', () => {
       it(`leaves a ${label} untouched`, () => {
         const doc = schemaAt('#/components/schemas/Named') as any;
         const v = place(doc) as Record<string, unknown>;
-        expect(collapseComponentSubtreeRefs(doc)).toBe(0);
+        expect(collapseComponentSubtreeRefs(doc).collapsed).toBe(0);
         expect(v).toEqual(literal);
       });
     }
@@ -316,7 +317,7 @@ describe('collapseComponentSubtreeRefs', () => {
       const doc = schemaAt('#/components/schemas/Wrapper/allOf/0') as any;
       const mt = doc.paths['/a'].get.responses['200'].content['application/json'];
       mt.examples = { e: { value: literal } };
-      expect(collapseComponentSubtreeRefs(doc)).toBe(1);
+      expect(collapseComponentSubtreeRefs(doc).collapsed).toBe(1);
       expect(mt.schema.$ref).toBe('#/components/schemas/Named');
     });
   });
