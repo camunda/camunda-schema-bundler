@@ -243,6 +243,30 @@ describe('collapseComponentSubtreeRefs', () => {
       ['media type in content map named example', (doc, schema) => {
         doc.paths['/b'].get.responses['200'].content.example = { schema };
       }],
+      // Example/Link maps are keyed by user-chosen names too: an `x-*` entry
+      // is a named Example/Link Object (or a Reference to one), not extension
+      // data — only nameMapExt maps (responses/paths/webhooks/callbacks)
+      // reserve `x-*` for extensions.
+      ['component example named x-data', (doc, schema) => {
+        doc.components.examples = { 'x-data': { summary: 's', externalValue: 'u', extra: schema } };
+      }],
+      ['component link named x-data', (doc, schema) => {
+        doc.components.links = { 'x-data': { operationId: 'x', external: { wrapped: schema } } };
+      }],
+      ['media-type example named x-data', (doc, schema) => {
+        doc.paths['/b'].get.responses['200'].content['application/json'].examples = {
+          'x-data': { summary: 's', externalValue: 'u', extra: schema },
+        };
+      }],
+      ['response link named x-data', (doc, schema) => {
+        doc.paths['/b'].get.responses['200'].links = { 'x-data': { operationId: 'x', external: { wrapped: schema } } };
+      }],
+      ['component example that is itself a Reference named x-data', (doc, schema) => {
+        doc.components.examples = { 'x-data': schema };
+      }],
+      ['component link that is itself a Reference named x-data', (doc, schema) => {
+        doc.components.links = { 'x-data': schema };
+      }],
     ];
     for (const [label, place] of namedEntries) {
       it(`still collapses a real ref in a ${label}`, () => {

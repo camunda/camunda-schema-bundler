@@ -741,6 +741,9 @@ export function collapseComponentSubtreeRefs(doc: Record<string, unknown>): numb
   //  - `node`: an OpenAPI/schema object.
   //  - `nameMap`: every key is a name; every value is a node.
   //  - `nameMapExt`: like `nameMap`, but `x-*` keys are extensions (data).
+  //    Only these maps reserve `x-*` for extensions; in Example/Link maps an
+  //    `x-*` key is just a user-chosen name for a real Example/Link Object
+  //    (or a Reference to one), so it is still collapsed / validated.
   //  - `exampleMap` / `exampleObject`: Example Objects, whose `value` is literal.
   //  - `linkMap` / `linkObject`: Link Objects, whose `requestBody` and
   //    `parameters` hold literal values / runtime expressions.
@@ -781,7 +784,7 @@ export function collapseComponentSubtreeRefs(doc: Record<string, unknown>): numb
       const entryCtx: Ctx =
         ctx === 'exampleMap' ? 'exampleObject' : ctx === 'linkMap' ? 'linkObject' : 'node';
       for (const [k, v] of Object.entries(obj)) {
-        if (ctx !== 'nameMap' && k.startsWith('x-')) continue;
+        if (ctx === 'nameMapExt' && k.startsWith('x-')) continue;
         stack.push({ node: v, ctx: entryCtx });
       }
       continue;
