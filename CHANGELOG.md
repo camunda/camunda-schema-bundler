@@ -1,3 +1,10 @@
+## [2.4.9](https://github.com/camunda/camunda-schema-bundler/compare/v2.4.8...v2.4.9) (2026-11-14)
+
+
+### Bug Fixes
+
+* detect optional tenantId inherited through allOf ([#48](https://github.com/camunda/camunda-schema-bundler/issues/48)) ([0a5329e](https://github.com/camunda/camunda-schema-bundler/commit/0a5329e1e74963c282fde7027ca0dbd61d07ed1c)), closes [#47](https://github.com/camunda/camunda-schema-bundler/issues/47)
+
 ## [2.4.8](https://github.com/camunda/camunda-schema-bundler/compare/v2.4.7...v2.4.8) (2026-11-14)
 
 
