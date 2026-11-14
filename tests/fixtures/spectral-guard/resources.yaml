@@ -1,0 +1,99 @@
+openapi: '3.0.3'
+info:
+  title: Resources
+  version: '1.0.0'
+paths:
+  /resources/{key}/variables/search:
+    post:
+      operationId: searchResourceVariables
+      summary: Search resource variables
+      description: Search the variables of a resource.
+      tags: [Resource]
+      parameters:
+        - $ref: 'search-models.yaml#/components/parameters/KeyPathParam'
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ResourceVariableSearchQueryRequest'
+      responses:
+        '200':
+          description: OK
+  /resources/{key}/effective-variables/search:
+    post:
+      operationId: searchResourceEffectiveVariables
+      summary: Search effective resource variables
+      description: Search the effective variables of a resource.
+      tags: [Resource]
+      parameters:
+        - $ref: 'search-models.yaml#/components/parameters/KeyPathParam'
+        - $ref: 'search-models.yaml#/components/parameters/DryRunQueryParam'
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ResourceEffectiveVariableSearchQueryRequest'
+      responses:
+        '200':
+          description: OK
+  /resources/{key}:
+    delete:
+      operationId: deleteResource
+      summary: Delete a resource
+      description: Delete a resource by key.
+      tags: [Resource]
+      parameters:
+        - $ref: 'search-models.yaml#/components/parameters/KeyPathParam'
+        - $ref: 'search-models.yaml#/components/parameters/DryRunQueryParam'
+      responses:
+        '204':
+          description: Deleted
+components:
+  schemas:
+    # Two structurally identical sort aliases: SwaggerParser dedupes the shared
+    # sort/items subtree into a path-local $ref (fixed in #38).
+    ResourceVariableSearchQuerySortRequest:
+      type: object
+      properties:
+        field:
+          description: The field to sort by.
+          type: string
+          enum: [value, name, tenantId, variableKey]
+        order:
+          $ref: 'search-models.yaml#/components/schemas/SortOrderEnum'
+      required: [field]
+    VariableSearchQuerySortRequest:
+      type: object
+      properties:
+        field:
+          description: The field to sort by.
+          type: string
+          enum: [value, name, tenantId, variableKey]
+        order:
+          $ref: 'search-models.yaml#/components/schemas/SortOrderEnum'
+      required: [field]
+    ResourceVariableSearchQueryRequest:
+      allOf:
+        - $ref: 'search-models.yaml#/components/schemas/SearchQueryRequest'
+      description: Resource variable search request.
+      additionalProperties: false
+      type: object
+      properties:
+        sort:
+          description: Sort field criteria.
+          type: array
+          items:
+            $ref: '#/components/schemas/ResourceVariableSearchQuerySortRequest'
+    ResourceEffectiveVariableSearchQueryRequest:
+      description: Effective variable search request.
+      additionalProperties: false
+      type: object
+      properties:
+        page:
+          allOf:
+            - $ref: 'search-models.yaml#/components/schemas/OffsetPagination'
+        sort:
+          description: Sort field criteria.
+          type: array
+          items:
+            $ref: '#/components/schemas/ResourceVariableSearchQuerySortRequest'

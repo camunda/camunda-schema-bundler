@@ -1,0 +1,20 @@
+openapi: '3.0.3'
+info:
+  title: Spectral guard fixture
+  description: >-
+    Multi-file spec exercising the defect classes where SwaggerParser.bundle()
+    emits path-local $refs. Paths deliberately contain `{...}` segments:
+    an unencoded brace in a surviving `#/paths/...` pointer is what Spectral
+    reports as an invalid uri-reference.
+  version: '1.0.0'
+servers:
+  - url: http://localhost/v2
+tags:
+  - name: Resource
+paths:
+  /resources/{key}/variables/search:
+    $ref: 'resources.yaml#/paths/~1resources~1{key}~1variables~1search'
+  /resources/{key}/effective-variables/search:
+    $ref: 'resources.yaml#/paths/~1resources~1{key}~1effective-variables~1search'
+  /resources/{key}:
+    $ref: 'resources.yaml#/paths/~1resources~1{key}'
