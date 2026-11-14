@@ -22,6 +22,7 @@ import type {
   DeprecatedEnumMemberEntry,
   SemanticProviderEntry,
 } from './types.js';
+import { jsonPointerDecode } from './helpers.js';
 
 const HTTP_METHODS = ['get', 'post', 'put', 'patch', 'delete', 'head', 'options', 'trace'] as const;
 
@@ -623,12 +624,18 @@ function resolveComponentRef(
  * Walks each schema together with its own `$ref` (component aliases) and its
  * `allOf` members (by `$ref` or inline), recursively. That is where composed
  * request bodies inherit `tenantId` from a shared base (#47).
- * `oneOf`/`anyOf` are not walked, because they do not constrain every instance.
+ * A `oneOf`/`anyOf` reached through this walk still constrains the body —
+ * every instance matches one of its branches — so the flag is computed per
+ * branch under the enclosing constraints and must hold for EVERY branch
+ * (a branch that requires `tenantId`, or never declares it, makes it
+ * non-optional overall). Every branch is validated before aggregating, so an
+ * unresolved or cyclic branch `$ref` throws regardless of position.
  * `tenantId` is optional when some level declares it under `properties` and no
  * level lists it in `required`. At least one level must be `type: object`.
  *
  * Throws on a `$ref` that is not a resolvable `#/components/schemas/` pointer
- * (component names are URI-decoded before lookup, e.g. `Base%2EName`), or a
+ * (component names are decoded before lookup — URI decoding plus JSON Pointer
+ * escapes, e.g. `Base%2EName` → `Base.Name`, `Base~0Name` → `Base~Name`), or a
  * cyclic chain: either means the flag cannot be computed, and guessing
  * would silently change SDK behaviour.
  */
@@ -636,25 +643,24 @@ function hasOptionalTenantId(
   schemas: Record<string, unknown>[],
   componentSchemas: Record<string, unknown>
 ): boolean {
-  let isObject = false;
-  let declared = false;
-  let required = false;
   const prefix = '#/components/schemas/';
 
-  const follow = (ref: string, chain: string[]): void => {
+  const follow = (ref: string, chain: string[]): Record<string, unknown> => {
     if (chain.includes(ref)) {
       throw new Error(
         `Cyclic $ref chain while computing optionalTenantIdInBody: ` +
           `${[...chain, ref].join(' -> ')}`
       );
     }
-    // Only `#/components/schemas/<name>` is resolvable here. The name may be
-    // URI-encoded (`Base%2EName` targets component `Base.Name`), so decode it
-    // before lookup. Reject anything with further path segments rather than
-    // silently matching on the last one: an interior pointer means the flag
-    // cannot be computed, and guessing would silently change SDK behaviour.
+    // Only `#/components/schemas/<name>` is resolvable here. The name segment
+    // may be URI-encoded and carry JSON Pointer escapes (RFC 6901: `~0` = `~`,
+    // `~1` = `/`), so decode both before lookup — `Base%2EName` targets
+    // `Base.Name`, `Base~0Name` targets `Base~Name`. Reject anything with
+    // further path segments rather than silently matching on the last one: an
+    // interior pointer means the flag cannot be computed, and guessing would
+    // silently change SDK behaviour.
     const rest = ref.startsWith(prefix) ? ref.slice(prefix.length) : undefined;
-    const name = rest !== undefined && !rest.includes('/') ? decodeURIComponent(rest) : undefined;
+    const name = rest !== undefined && !rest.includes('/') ? jsonPointerDecode(rest) : undefined;
     const target = name !== undefined ? componentSchemas[name] : undefined;
     if (!target || typeof target !== 'object') {
       throw new Error(
@@ -662,26 +668,93 @@ function hasOptionalTenantId(
           `computing optionalTenantIdInBody (chain: ${[...chain, ref].join(' -> ')})`
       );
     }
-    visit(target as Record<string, unknown>, [...chain, ref]);
+    return target as Record<string, unknown>;
   };
 
-  const visit = (node: Record<string, unknown>, chain: string[]): void => {
-    if (node['type'] === 'object') isObject = true;
+  /**
+   * Conjunctive walk: `node`'s own constraints plus everything that applies to
+   * every instance alongside it — its own `$ref` (component alias) and its
+   * `allOf` members — returning what that subtree establishes about tenantId.
+   * A nested `oneOf`/`anyOf` still constrains the body (every instance matches
+   * one branch), so the flag must hold for EVERY branch under the enclosing
+   * constraints; a branch that cannot guarantee an optional tenantId vetoes
+   * the whole union. Every branch is walked before aggregating, so an
+   * unresolved or cyclic branch `$ref` throws regardless of position.
+   */
+  interface WalkState {
+    isObject: boolean;
+    declared: boolean;
+    required: boolean;
+  }
+  const walk = (node: Record<string, unknown>, chain: string[]): WalkState => {
+    let isObject = node['type'] === 'object';
     const props = node['properties'] as Record<string, unknown> | undefined;
-    if (props && props['tenantId']) declared = true;
+    let declared = !!(props && props['tenantId']);
     const req = node['required'];
-    if (Array.isArray(req) && req.includes('tenantId')) required = true;
+    let required = Array.isArray(req) && req.includes('tenantId');
 
     const ownRef = node['$ref'];
-    if (typeof ownRef === 'string') follow(ownRef, chain);
+    if (typeof ownRef === 'string') {
+      const r = walk(follow(ownRef, chain), [...chain, ownRef]);
+      isObject ||= r.isObject;
+      declared ||= r.declared;
+      required ||= r.required;
+    }
 
     const allOf = node['allOf'];
-    if (!Array.isArray(allOf)) return;
-    for (const member of allOf as Record<string, unknown>[]) {
-      if (member && typeof member === 'object') visit(member, chain);
+    if (Array.isArray(allOf)) {
+      for (const member of allOf as Record<string, unknown>[]) {
+        if (member && typeof member === 'object') {
+          const r = walk(member, chain);
+          isObject ||= r.isObject;
+          declared ||= r.declared;
+          required ||= r.required;
+        }
+      }
     }
+
+    // Evaluate a nested union LAST, against the complete enclosing state:
+    // every sibling conjunct applies to whichever branch an instance matches,
+    // no matter where the union sits among them.
+    const union = (node['oneOf'] || node['anyOf']) as
+      | Record<string, unknown>[]
+      | undefined;
+    if (Array.isArray(union)) {
+      const enclosing: WalkState = { isObject, declared, required };
+      const branchResults = union.map((branch) => {
+        if (!branch || typeof branch !== 'object') return false;
+        const b = walk(branch, chain);
+        return (
+          (b.isObject || enclosing.isObject) &&
+          (b.declared || enclosing.declared) &&
+          !b.required &&
+          !enclosing.required
+        );
+      });
+      if (branchResults.every(Boolean)) {
+        // Every branch guarantees an optional tenantId under the enclosing
+        // constraints, so the union establishes the flag for this node too.
+        isObject = true;
+        declared = true;
+      } else {
+        // A branch that cannot guarantee an optional tenantId vetoes the
+        // whole union: some instance of this node may lack it (or must
+        // supply it), so the flag cannot be reported for this node.
+        required = true;
+      }
+    }
+
+    return { isObject, declared, required };
   };
 
-  for (const schema of schemas) visit(schema, []);
+  let isObject = false;
+  let declared = false;
+  let required = false;
+  for (const schema of schemas) {
+    const r = walk(schema, []);
+    isObject ||= r.isObject;
+    declared ||= r.declared;
+    required ||= r.required;
+  }
   return isObject && declared && !required;
 }

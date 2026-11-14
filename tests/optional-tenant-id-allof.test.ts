@@ -291,4 +291,155 @@ describe('optionalTenantIdInBody through allOf (#47)', () => {
     };
     expect(() => optionalTenantIdInBody(schemas, 'Req')).toThrow(/Gone%2EName/);
   });
+
+  // Review on #48: a component name may itself contain `~` or `/`, spelled in
+  // the pointer with JSON Pointer escapes (RFC 6901: `~0` = `~`, `~1` = `/`).
+  it('resolves a component $ref whose name carries JSON Pointer escapes', () => {
+    const schemas = {
+      'Base~Name': Base,
+      'Org/Schema': Base,
+      Req: { allOf: [{ $ref: '#/components/schemas/Base~0Name' }] },
+      ReqSlash: { allOf: [{ $ref: '#/components/schemas/Org~1Schema' }] },
+    };
+    expect(optionalTenantIdInBody(schemas, 'Req')).toBe(true);
+    expect(optionalTenantIdInBody(schemas, 'ReqSlash')).toBe(true);
+  });
+
+  it('resolves a JSON Pointer–escaped component $ref at the top level', () => {
+    const schemas = { 'Base~Name': Base };
+    expect(optionalTenantIdInBody(schemas, 'Base~0Name')).toBe(true);
+  });
+
+  it('throws on a JSON Pointer–escaped name that decodes to no component', () => {
+    const schemas = {
+      Base,
+      Req: { allOf: [{ $ref: '#/components/schemas/Gone~0Name' }] },
+    };
+    expect(() => optionalTenantIdInBody(schemas, 'Req')).toThrow(/Gone~0Name/);
+  });
+
+  // Review on #48: a union nested inside allOf still constrains the body —
+  // every instance matches one branch, so a branch that requires tenantId (or
+  // never declares it) makes it non-optional overall.
+  it('is false when a union nested in allOf has a branch that requires tenantId', () => {
+    const schemas = {
+      Base,
+      Req: {
+        allOf: [
+          ref('Base'),
+          {
+            oneOf: [
+              { type: 'object', properties: { tenantId: { type: 'string' } }, required: ['tenantId'] },
+              { type: 'object', properties: { tenantId: { type: 'string' } } },
+            ],
+          },
+        ],
+      },
+    };
+    expect(optionalTenantIdInBody(schemas, 'Req')).toBe(false);
+  });
+
+  it('is false when a union nested in allOf has a branch that never declares tenantId', () => {
+    const schemas = {
+      Base,
+      Req: {
+        allOf: [
+          ref('Base'),
+          {
+            anyOf: [
+              { type: 'object', properties: { other: { type: 'string' } } },
+              { type: 'object', properties: { tenantId: { type: 'string' } } },
+            ],
+          },
+        ],
+      },
+    };
+    expect(optionalTenantIdInBody(schemas, 'Req')).toBe(false);
+  });
+
+  it('is true when every branch of a union nested in allOf keeps tenantId optional', () => {
+    const schemas = {
+      Base,
+      Req: {
+        allOf: [
+          ref('Base'),
+          {
+            oneOf: [
+              { type: 'object', properties: { tenantId: { type: 'string' } } },
+              { type: 'object', properties: { tenantId: { type: 'string' } } },
+            ],
+          },
+        ],
+      },
+    };
+    expect(optionalTenantIdInBody(schemas, 'Req')).toBe(true);
+  });
+
+  it('is true for an alias to a union whose variants all keep tenantId optional', () => {
+    const schemas = {
+      Base,
+      ByKey: {
+        type: 'object',
+        allOf: [ref('Base')],
+        properties: { processDefinitionKey: { type: 'string' } },
+      },
+      ById: {
+        type: 'object',
+        allOf: [ref('Base')],
+        properties: { processDefinitionId: { type: 'string' } },
+      },
+      Instruction: { oneOf: [ref('ByKey'), ref('ById')] },
+      Alias: { $ref: '#/components/schemas/Instruction' },
+    };
+    expect(optionalTenantIdInBody(schemas, 'Alias')).toBe(true);
+  });
+
+  it('is false for an alias to a union when a variant requires tenantId', () => {
+    const schemas = {
+      Base,
+      Strict: { allOf: [ref('Base')], required: ['tenantId'] },
+      Lenient: { allOf: [ref('Base')] },
+      U: { oneOf: [ref('Strict'), ref('Lenient')] },
+      Alias: { $ref: '#/components/schemas/U' },
+    };
+    expect(optionalTenantIdInBody(schemas, 'Alias')).toBe(false);
+  });
+
+  it('is false when a nested-union branch requires tenantId even with the union not last in allOf', () => {
+    const schemas = {
+      Base,
+      Req: {
+        allOf: [
+          {
+            oneOf: [
+              { type: 'object', properties: { tenantId: { type: 'string' } }, required: ['tenantId'] },
+              { type: 'object', properties: { tenantId: { type: 'string' } } },
+            ],
+          },
+          ref('Base'),
+        ],
+      },
+    };
+    expect(optionalTenantIdInBody(schemas, 'Req')).toBe(false);
+  });
+
+  it('throws on an unresolved $ref inside a nested union branch', () => {
+    const schemas = {
+      Base,
+      Req: {
+        allOf: [
+          ref('Base'),
+          {
+            oneOf: [
+              { type: 'object', properties: { tenantId: { type: 'string' } } },
+              { $ref: '#/components/schemas/Gone' },
+            ],
+          },
+        ],
+      },
+    };
+    expect(() => optionalTenantIdInBody(schemas, 'Req')).toThrow(
+      /#\/components\/schemas\/Gone/
+    );
+  });
 });
