@@ -195,6 +195,64 @@ paths:
   });
 });
 
+/**
+ * Same losslessness rule as the response side: a `description` sibling on a
+ * path-local parameter `$ref` overrides the target's description and must
+ * survive inlining.
+ */
+describe('description override on a path-local parameter $ref', () => {
+  let specDir: string;
+
+  beforeAll(() => {
+    specDir = fs.mkdtempSync(path.join(os.tmpdir(), 'bundler-param-override-'));
+    fs.writeFileSync(
+      path.join(specDir, 'rest-api.yaml'),
+      `openapi: '3.0.3'
+info:
+  title: Test API
+  version: '1.0.0'
+paths:
+  /a:
+    get:
+      operationId: opA
+      parameters:
+        - name: alpha
+          in: query
+          required: false
+          description: Shared description.
+          schema:
+            type: string
+      responses:
+        '200':
+          description: OK
+  /b:
+    get:
+      operationId: opB
+      parameters:
+        - $ref: '#/paths/~1a/get/parameters/0'
+          description: Operation-specific description.
+      responses:
+        '200':
+          description: OK
+`,
+      'utf8'
+    );
+  });
+
+  it('keeps the sibling description when inlining the referenced parameter', async () => {
+    const result = await bundle({ specDir });
+    const spec = result.spec as Record<string, unknown>;
+    const paths = spec['paths'] as Record<string, Record<string, unknown>>;
+    const op = paths['/b']?.['get'] as Record<string, unknown>;
+    const params = op?.['parameters'] as Record<string, unknown>[];
+
+    expect(params).toHaveLength(1);
+    expect(params[0]['$ref']).toBeUndefined();
+    expect(params[0]['name']).toBe('alpha');
+    expect(params[0]['description']).toBe('Operation-specific description.');
+  });
+});
+
 describe('unresolvable path-local $refs in parameters arrays', () => {
   let specDir: string;
 
