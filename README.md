@@ -109,6 +109,7 @@ camunda-schema-bundler --version
 | `--deref-path-local` | Inline remaining path-local `$ref`s (needed for Microsoft.OpenApi) |
 | `--allow-like-refs` | Don't fail on surviving path-local `$like` refs |
 | `--allow-param-refs` | Don't fail on surviving path-local `$ref`s inside `parameters` arrays |
+| `--allow-response-refs` | Don't fail on surviving path-local `$ref`s used as `responses` map values |
 | `--allow-interior-refs` | Don't fail on `$ref`s that point inside a component schema (e.g. `#/components/schemas/Foo/allOf/0`) and cannot be retargeted to a named component |
 | **General** | |
 | `--help`, `-h` | Show help |
@@ -195,6 +196,8 @@ import {
   findPathLocalLikeRefs, // Find surviving path-local $like refs in a spec
   findPathLocalParameterRefs, // Find surviving path-local $refs in parameters arrays
   forEachParameterArray, // Visit every path-item / operation `parameters` array
+  findPathLocalResponseRefs, // Find surviving path-local $refs in responses maps
+  forEachResponsesMap,   // Visit every operation `responses` map
 } from 'camunda-schema-bundler';
 ```
 
@@ -214,9 +217,10 @@ import {
 7. **Retarget interior refs** — Rewrite `$ref`s that point inside a component schema (e.g. `#/components/schemas/AuthenticatedCamundaUserResult/allOf/0`) to the named component they resolve to. `SwaggerParser.bundle()` emits these when a schema is first met nested inside another component; once fresh dedup turns the nested copy into a component ref, they are refs to refs that generators cannot follow. Fail-fast if any cannot be retargeted (configurable with `--allow-interior-refs`)
 8. **Rewrite** — Decode URI-encoded internal refs (`%24like` → `$like`)
 9. **Inline parameter refs** — Always inline path-local `$ref`s that survive inside `parameters` arrays. `SwaggerParser.bundle()` drops `components.parameters` entirely and dedupes the resulting identical parameter objects into `#/paths/...` refs, which step 4 cannot rewrite because there is no surviving component to point at. Generators cannot resolve them (openapi-generator aborts with "There are duplicate parameter values"), and parameters are never emitted as named types, so inlining is lossless. Fail-fast if any survive (configurable with `--allow-param-refs`)
-10. **Validate** — Fail-fast if any path-local `$like` refs survive (configurable with `--allow-like-refs`)
-11. **Dereference** (optional, `--deref-path-local`) — Inline remaining path-local `$ref`s for strict generators
-12. **Extract metadata** — Build the intermediate representation (semantic keys, unions, operations, etc.)
+10. **Inline response refs** — Same for path-local `$ref`s used as `responses` map values: `components.responses` does not survive bundling either, so every reuse of a shared response (e.g. `401`/`500` error responses) becomes a `#/paths/.../responses/<status>` ref. Consumers that only resolve `#/components/...` pointers drop these. Response Objects are never emitted as named types (the schemas inside them keep their component refs), so inlining is lossless. Only targets that are Response Objects are inlined; fail-fast if any survive (configurable with `--allow-response-refs`)
+11. **Validate** — Fail-fast if any path-local `$like` refs survive (configurable with `--allow-like-refs`)
+12. **Dereference** (optional, `--deref-path-local`) — Inline remaining path-local `$ref`s for strict generators
+13. **Extract metadata** — Build the intermediate representation (semantic keys, unions, operations, etc.)
 
 ## Metadata IR
 
