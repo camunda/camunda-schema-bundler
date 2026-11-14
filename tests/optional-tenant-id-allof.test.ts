@@ -221,4 +221,74 @@ describe('optionalTenantIdInBody through allOf (#47)', () => {
     const schemas = { A: ref('B'), B: ref('A'), Req: { allOf: [ref('A')] } };
     expect(() => optionalTenantIdInBody(schemas, 'Req')).toThrow(/cycl/i);
   });
+
+  // Review on #48: `every` must not short-circuit — a nonqualifying variant
+  // must not spare later variants from validation (order-independent).
+  it('throws on an unresolved variant $ref even when a nonqualifying variant comes first', () => {
+    const schemas = {
+      V1: { type: 'object', properties: { a: { type: 'string' } } },
+      U: { oneOf: [ref('V1'), ref('Gone')] },
+    };
+    expect(() => optionalTenantIdInBody(schemas, 'U')).toThrow(/#\/components\/schemas\/Gone/);
+  });
+
+  it('throws on a cyclic variant $ref even when a nonqualifying variant comes first', () => {
+    const schemas = {
+      V1: { type: 'object', properties: { a: { type: 'string' } } },
+      A: ref('B'),
+      B: ref('A'),
+      U: { oneOf: [ref('V1'), ref('A')] },
+    };
+    expect(() => optionalTenantIdInBody(schemas, 'U')).toThrow(/cycl/i);
+  });
+
+  it('throws on a non-component variant $ref even when a nonqualifying variant comes first', () => {
+    const schemas = {
+      V1: { type: 'object', properties: { a: { type: 'string' } } },
+      U: { oneOf: [ref('V1'), { $ref: './other.yaml#/Base' }] },
+    };
+    expect(() => optionalTenantIdInBody(schemas, 'U')).toThrow(/other\.yaml/);
+  });
+
+  it('is true when every variant qualifies, regardless of order', () => {
+    const schemas = {
+      Base,
+      WithTenant: { allOf: [ref('Base')] },
+      Plain: { allOf: [ref('Base')] },
+      U: { oneOf: [ref('WithTenant'), ref('Plain')] },
+    };
+    expect(optionalTenantIdInBody(schemas, 'U')).toBe(true);
+  });
+
+  // Review on #48: component names may be URI-encoded in the pointer.
+  it('resolves a component $ref whose name is URI-encoded', () => {
+    const schemas = {
+      'Base.Name': Base,
+      Req: { allOf: [{ $ref: '#/components/schemas/Base%2EName' }] },
+    };
+    expect(optionalTenantIdInBody(schemas, 'Req')).toBe(true);
+  });
+
+  it('resolves a URI-encoded component $ref at the top level', () => {
+    const schemas = { 'Base.Name': Base };
+    expect(optionalTenantIdInBody(schemas, 'Base%2EName')).toBe(true);
+  });
+
+  it('throws on a component $ref with extra path segments after the name', () => {
+    const schemas = {
+      Base,
+      Req: { allOf: [{ $ref: '#/components/schemas/Base/properties/tenantId' }] },
+    };
+    expect(() => optionalTenantIdInBody(schemas, 'Req')).toThrow(
+      /#\/components\/schemas\/Base\/properties\/tenantId/
+    );
+  });
+
+  it('throws on an encoded name that decodes to no component', () => {
+    const schemas = {
+      Base,
+      Req: { allOf: [{ $ref: '#/components/schemas/Gone%2EName' }] },
+    };
+    expect(() => optionalTenantIdInBody(schemas, 'Req')).toThrow(/Gone%2EName/);
+  });
 });

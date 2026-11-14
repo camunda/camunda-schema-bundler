@@ -476,8 +476,14 @@ function extractOperations(
               // tenantId. Each variant is evaluated together with the
               // wrapper's own properties/required/allOf, which apply to every
               // variant (a wrapper-level `required: [tenantId]` makes it
-              // mandatory throughout).
-              if (variants.every((v) => hasOptionalTenantId([schema, v], componentSchemas))) {
+              // mandatory throughout). Evaluate EVERY variant before
+              // aggregating: a short-circuiting `every` would spare later
+              // variants from validation, making unresolved/cyclic refs
+              // order-dependent.
+              const variantResults = variants.map((v) =>
+                hasOptionalTenantId([schema, v], componentSchemas)
+              );
+              if (variantResults.every(Boolean)) {
                 optionalTenantIdInBody = true;
               }
             } else {
@@ -621,8 +627,9 @@ function resolveComponentRef(
  * `tenantId` is optional when some level declares it under `properties` and no
  * level lists it in `required`. At least one level must be `type: object`.
  *
- * Throws on a `$ref` that is not a resolvable `#/components/schemas/` pointer,
- * or a cyclic chain: either means the flag cannot be computed, and guessing
+ * Throws on a `$ref` that is not a resolvable `#/components/schemas/` pointer
+ * (component names are URI-decoded before lookup, e.g. `Base%2EName`), or a
+ * cyclic chain: either means the flag cannot be computed, and guessing
  * would silently change SDK behaviour.
  */
 function hasOptionalTenantId(
@@ -641,9 +648,14 @@ function hasOptionalTenantId(
           `${[...chain, ref].join(' -> ')}`
       );
     }
-    const target = ref.startsWith(prefix)
-      ? componentSchemas[ref.slice(prefix.length)]
-      : undefined;
+    // Only `#/components/schemas/<name>` is resolvable here. The name may be
+    // URI-encoded (`Base%2EName` targets component `Base.Name`), so decode it
+    // before lookup. Reject anything with further path segments rather than
+    // silently matching on the last one: an interior pointer means the flag
+    // cannot be computed, and guessing would silently change SDK behaviour.
+    const rest = ref.startsWith(prefix) ? ref.slice(prefix.length) : undefined;
+    const name = rest !== undefined && !rest.includes('/') ? decodeURIComponent(rest) : undefined;
+    const target = name !== undefined ? componentSchemas[name] : undefined;
     if (!target || typeof target !== 'object') {
       throw new Error(
         `$ref ${ref} does not resolve to a component schema while ` +
