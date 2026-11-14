@@ -22,6 +22,8 @@ import {
   findPathLocalLikeRefs,
   forEachParameterArray,
   findPathLocalParameterRefs,
+  forEachResponsesMap,
+  findPathLocalResponseRefs,
   sortRequiredArrays,
   collapseComponentInteriorRefs,
 } from './helpers.js';
@@ -882,6 +884,7 @@ export async function bundle(options: BundleOptions): Promise<BundleResult> {
     pathLocalLikeRefCount: 0,
     componentSubtreeRefsCollapsed: 0,
     inlinedPathLocalParameterCount: 0,
+    inlinedPathLocalResponseCount: 0,
     collapsedComponentInteriorRefCount: 0,
     componentInteriorRefCount: 0,
   };
@@ -1233,6 +1236,69 @@ export async function bundle(options: BundleOptions): Promise<BundleResult> {
     }
   }
 
+  // ── Step 3e: Always inline path-local $refs used as `responses` values ────
+  //
+  // Same mechanism as Step 3d, for `components.responses`: the section does
+  // not survive bundling, so every reuse of a shared response becomes a
+  // path-local $ref to whichever operation SwaggerParser emitted first:
+  //
+  //   GET /agent-definitions/{agentDefinitionKey}:
+  //     responses:
+  //       '401': { $ref: '#/paths/~1clock/get/responses/401' }
+  //
+  // The real Camunda spec carries hundreds of these. Consumers that only
+  // resolve `#/components/...` pointers (e.g. api-test-generator) silently drop
+  // the response.
+  //
+  // Response Objects are never emitted as named types by any generator — the
+  // schemas inside them are, and those keep their `#/components/schemas/*`
+  // refs through the deep copy — so inlining is lossless and done
+  // unconditionally, for the same reason as Step 3d.
+  {
+    const isPathLocalRef = (node: unknown): boolean => {
+      if (!node || typeof node !== 'object' || Array.isArray(node)) return false;
+      const ref = (node as Record<string, unknown>)['$ref'];
+      return typeof ref === 'string' && ref.startsWith('#/paths/');
+    };
+
+    // A Response Object requires `description` and allows only these fields
+    // (plus `x-` extensions). Checking the full key set, not just
+    // `description`, is what rejects a Parameter or Schema Object a bad
+    // pointer may land on — both of which may also carry a `description`.
+    const RESPONSE_KEYS = new Set(['description', 'headers', 'content', 'links']);
+    const isResponseObject = (node: unknown): boolean => {
+      if (!node || typeof node !== 'object' || Array.isArray(node)) return false;
+      const r = node as Record<string, unknown>;
+      return (
+        typeof r['description'] === 'string' &&
+        Object.keys(r).every((k) => RESPONSE_KEYS.has(k) || k.startsWith('x-'))
+      );
+    };
+
+    for (let pass = 1; pass <= 20; pass++) {
+      let inlined = 0;
+      forEachResponsesMap(bundled, (responses) => {
+        for (const [status, response] of Object.entries(responses)) {
+          if (!isPathLocalRef(response)) continue;
+          const ref = (response as Record<string, unknown>)['$ref'] as string;
+          const resolved =
+            resolveInternalRef(postNormSnapshot as Record<string, unknown>, ref) ??
+            resolveInternalRef(preNormSnapshot as Record<string, unknown>, ref);
+          // Anything that is not a Response Object — a primitive, another
+          // object type, a missing target, or another path-local ref (a
+          // cycle) — leaves the $ref in place, uncounted, so the Step 5 guard
+          // reports it.
+          if (isResponseObject(resolved)) {
+            responses[status] = JSON.parse(JSON.stringify(resolved));
+            inlined++;
+          }
+        }
+      });
+      stats.inlinedPathLocalResponseCount += inlined;
+      if (inlined === 0) break;
+    }
+  }
+
   // ── Step 4: Optionally dereference remaining path-local $refs ─────────────
 
   if (options.dereferencePathLocalRefs) {
@@ -1428,6 +1494,22 @@ export async function bundle(options: BundleOptions): Promise<BundleResult> {
         `\n\nThese cannot be resolved by openapi-generator or Microsoft.OpenApi and cause ` +
         `"duplicate parameter values" failures. Set allowPathLocalParameterRefs ` +
         `(CLI: --allow-param-refs) to bypass.`
+    );
+  }
+
+  // Step 3e should have inlined all of these. A survivor points at something
+  // that is not a Response Object, so fail loudly rather than emit it.
+  const survivingResponseRefs = findPathLocalResponseRefs(bundled);
+  if (
+    survivingResponseRefs.length > 0 &&
+    !options.allowPathLocalResponseRefs
+  ) {
+    throw new Error(
+      `${survivingResponseRefs.length} path-local $ref(s) survived in responses maps ` +
+        `and could not be inlined (target is missing, cyclic, or not a Response Object):\n` +
+        survivingResponseRefs.map((r) => `  ${r}`).join('\n') +
+        `\n\nConsumers that only resolve #/components/... pointers drop these responses. ` +
+        `Set allowPathLocalResponseRefs (CLI: --allow-response-refs) to bypass.`
     );
   }
 

@@ -56,6 +56,9 @@ export interface FetchAndBundleOptions {
   /** If true, allow surviving path-local $refs inside `parameters` arrays. */
   allowPathLocalParameterRefs?: boolean;
 
+  /** If true, allow surviving path-local $refs used as `responses` map values. */
+  allowPathLocalResponseRefs?: boolean;
+
   /** If true, allow surviving $refs that point inside a component schema. */
   allowComponentInteriorRefs?: boolean;
 
@@ -123,6 +126,12 @@ export interface BundleOptions {
   allowPathLocalParameterRefs?: boolean;
 
   /**
+   * If true, allow surviving path-local $refs used as `responses` map values
+   * without failing. Default: false (fail-fast).
+   */
+  allowPathLocalResponseRefs?: boolean;
+
+  /**
    * If true, allow surviving `$ref`s that point inside a component schema
    * (e.g. `#/components/schemas/Foo/allOf/0`) and cannot be retargeted to a
    * named component, without failing. Default: false (fail-fast).
@@ -174,6 +183,8 @@ export interface BundleStats {
   componentSubtreeRefsCollapsed: number;
   /** Path-local `$refs` inlined inside `parameters` arrays (always applied). */
   inlinedPathLocalParameterCount: number;
+  /** Path-local `$refs` inlined as `responses` map values (always applied). */
+  inlinedPathLocalResponseCount: number;
   /** `$ref`s pointing inside a component schema, retargeted to the named component. */
   collapsedComponentInteriorRefCount: number;
   /** `$ref`s pointing inside a component schema that could not be retargeted. */

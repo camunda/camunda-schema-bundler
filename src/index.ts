@@ -33,4 +33,6 @@ export {
   findPathLocalLikeRefs,
   findPathLocalParameterRefs,
   forEachParameterArray,
+  findPathLocalResponseRefs,
+  forEachResponsesMap,
 } from './helpers.js';
