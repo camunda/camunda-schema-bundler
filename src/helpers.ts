@@ -392,6 +392,18 @@ export function sortRequiredArrays(root: unknown): void {
   }
 }
 
+/** Path Item keys that hold Operation Objects. */
+const HTTP_METHODS = new Set([
+  'get',
+  'put',
+  'post',
+  'delete',
+  'options',
+  'head',
+  'patch',
+  'trace',
+]);
+
 /**
  * Visit every `parameters` array reachable under `paths`, at both the
  * path-item level (`paths./foo.parameters`) and the operation level
@@ -413,6 +425,7 @@ export function forEachParameterArray(
   for (const [apiPath, itemRaw] of Object.entries(
     paths as Record<string, unknown>
   )) {
+    if (apiPath.startsWith('x-')) continue;
     if (!itemRaw || typeof itemRaw !== 'object') continue;
     for (const [key, valueRaw] of Object.entries(
       itemRaw as Record<string, unknown>
@@ -421,6 +434,9 @@ export function forEachParameterArray(
         if (Array.isArray(valueRaw)) visit(valueRaw, apiPath);
         continue;
       }
+      // Only HTTP-method keys hold Operation Objects; `x-*` extensions and
+      // other Path Item fields are not traversed.
+      if (!HTTP_METHODS.has(key)) continue;
       if (!valueRaw || typeof valueRaw !== 'object' || Array.isArray(valueRaw))
         continue;
       const params = (valueRaw as Record<string, unknown>)['parameters'];
@@ -474,10 +490,13 @@ export function forEachResponsesMap(
   for (const [apiPath, itemRaw] of Object.entries(
     paths as Record<string, unknown>
   )) {
+    if (apiPath.startsWith('x-')) continue;
     if (!itemRaw || typeof itemRaw !== 'object') continue;
     for (const [key, opRaw] of Object.entries(
       itemRaw as Record<string, unknown>
     )) {
+      // Only HTTP-method keys hold Operation Objects (skips `x-*` extensions).
+      if (!HTTP_METHODS.has(key)) continue;
       if (!opRaw || typeof opRaw !== 'object' || Array.isArray(opRaw)) continue;
       const responses = (opRaw as Record<string, unknown>)['responses'];
       if (responses && typeof responses === 'object' && !Array.isArray(responses))
@@ -502,6 +521,7 @@ export function findPathLocalResponseRefs(
   const found: string[] = [];
   forEachResponsesMap(root, (responses, where) => {
     for (const [status, response] of Object.entries(responses)) {
+      if (status.startsWith('x-')) continue; // extension, not a response
       if (!response || typeof response !== 'object') continue;
       const ref = (response as Record<string, unknown>)['$ref'];
       if (typeof ref === 'string' && ref.startsWith('#/paths/'))

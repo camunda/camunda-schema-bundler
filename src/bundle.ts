@@ -1279,6 +1279,7 @@ export async function bundle(options: BundleOptions): Promise<BundleResult> {
       let inlined = 0;
       forEachResponsesMap(bundled, (responses) => {
         for (const [status, response] of Object.entries(responses)) {
+          if (status.startsWith('x-')) continue; // extension, not a response
           if (!isPathLocalRef(response)) continue;
           const ref = (response as Record<string, unknown>)['$ref'] as string;
           const resolved =
@@ -1297,6 +1298,42 @@ export async function bundle(options: BundleOptions): Promise<BundleResult> {
       stats.inlinedPathLocalResponseCount += inlined;
       if (inlined === 0) break;
     }
+  }
+
+  // These guards run BEFORE Step 4: dereferencing would otherwise replace
+  // the rejected refs with their (invalid) targets and hide them.
+  //
+  // Step 3d should have inlined all of these. A survivor means the pointer
+  // could not be resolved, so the bundle is one no generator can consume —
+  // fail loudly rather than emit it.
+  const survivingParameterRefs = findPathLocalParameterRefs(bundled);
+  if (
+    survivingParameterRefs.length > 0 &&
+    !options.allowPathLocalParameterRefs
+  ) {
+    throw new Error(
+      `${survivingParameterRefs.length} path-local $ref(s) survived inside parameters arrays:\n` +
+        survivingParameterRefs.map((r) => `  ${r}`).join('\n') +
+        `\n\nThese cannot be resolved by openapi-generator or Microsoft.OpenApi and cause ` +
+        `"duplicate parameter values" failures. Set allowPathLocalParameterRefs ` +
+        `(CLI: --allow-param-refs) to bypass.`
+    );
+  }
+
+  // Step 3e should have inlined all of these. A survivor points at something
+  // that is not a Response Object, so fail loudly rather than emit it.
+  const survivingResponseRefs = findPathLocalResponseRefs(bundled);
+  if (
+    survivingResponseRefs.length > 0 &&
+    !options.allowPathLocalResponseRefs
+  ) {
+    throw new Error(
+      `${survivingResponseRefs.length} path-local $ref(s) survived in responses maps ` +
+        `and could not be inlined (target is missing, cyclic, or not a Response Object):\n` +
+        survivingResponseRefs.map((r) => `  ${r}`).join('\n') +
+        `\n\nConsumers that only resolve #/components/... pointers drop these responses. ` +
+        `Set allowPathLocalResponseRefs (CLI: --allow-response-refs) to bypass.`
+    );
   }
 
   // ── Step 4: Optionally dereference remaining path-local $refs ─────────────
@@ -1477,39 +1514,6 @@ export async function bundle(options: BundleOptions): Promise<BundleResult> {
     throw new Error(
       `${stats.pathLocalLikeRefCount} path-local $like ref(s) survived normalization. ` +
         `This will cause generator failures. Set allowPathLocalLikeRefs to bypass.`
-    );
-  }
-
-  // Step 3d should have inlined all of these. A survivor means the pointer
-  // could not be resolved, so the bundle is one no generator can consume —
-  // fail loudly rather than emit it.
-  const survivingParameterRefs = findPathLocalParameterRefs(bundled);
-  if (
-    survivingParameterRefs.length > 0 &&
-    !options.allowPathLocalParameterRefs
-  ) {
-    throw new Error(
-      `${survivingParameterRefs.length} path-local $ref(s) survived inside parameters arrays:\n` +
-        survivingParameterRefs.map((r) => `  ${r}`).join('\n') +
-        `\n\nThese cannot be resolved by openapi-generator or Microsoft.OpenApi and cause ` +
-        `"duplicate parameter values" failures. Set allowPathLocalParameterRefs ` +
-        `(CLI: --allow-param-refs) to bypass.`
-    );
-  }
-
-  // Step 3e should have inlined all of these. A survivor points at something
-  // that is not a Response Object, so fail loudly rather than emit it.
-  const survivingResponseRefs = findPathLocalResponseRefs(bundled);
-  if (
-    survivingResponseRefs.length > 0 &&
-    !options.allowPathLocalResponseRefs
-  ) {
-    throw new Error(
-      `${survivingResponseRefs.length} path-local $ref(s) survived in responses maps ` +
-        `and could not be inlined (target is missing, cyclic, or not a Response Object):\n` +
-        survivingResponseRefs.map((r) => `  ${r}`).join('\n') +
-        `\n\nConsumers that only resolve #/components/... pointers drop these responses. ` +
-        `Set allowPathLocalResponseRefs (CLI: --allow-response-refs) to bypass.`
     );
   }
 
