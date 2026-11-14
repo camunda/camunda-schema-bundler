@@ -149,4 +149,76 @@ describe('optionalTenantIdInBody through allOf (#47)', () => {
     };
     expect(() => optionalTenantIdInBody(schemas, 'A')).toThrow(/cycl/i);
   });
+
+  // Review on #48: the union wrapper's own constraints apply to every variant.
+  it('is false for a union whose wrapper requires tenantId', () => {
+    const schemas = {
+      Base,
+      V1: { allOf: [ref('Base')] },
+      V2: { allOf: [ref('Base')] },
+      Instruction: { required: ['tenantId'], oneOf: [ref('V1'), ref('V2')] },
+    };
+    expect(optionalTenantIdInBody(schemas, 'Instruction')).toBe(false);
+  });
+
+  it('is false for a union whose wrapper allOf requires tenantId', () => {
+    const schemas = {
+      Base,
+      V1: { allOf: [ref('Base')] },
+      V2: { allOf: [ref('Base')] },
+      Instruction: {
+        allOf: [{ required: ['tenantId'] }],
+        oneOf: [ref('V1'), ref('V2')],
+      },
+    };
+    expect(optionalTenantIdInBody(schemas, 'Instruction')).toBe(false);
+  });
+
+  it('is true for a union whose wrapper declares an optional tenantId the variants share', () => {
+    const schemas = {
+      V1: { type: 'object', properties: { a: { type: 'string' } } },
+      V2: { type: 'object', properties: { b: { type: 'string' } } },
+      Instruction: {
+        type: 'object',
+        properties: { tenantId: { type: 'string' } },
+        oneOf: [ref('V1'), ref('V2')],
+      },
+    };
+    expect(optionalTenantIdInBody(schemas, 'Instruction')).toBe(true);
+  });
+
+  it('throws on a union variant $ref that does not resolve', () => {
+    const schemas = { Base, V1: { allOf: [ref('Base')] }, U: { oneOf: [ref('V1'), ref('Gone')] } };
+    expect(() => optionalTenantIdInBody(schemas, 'U')).toThrow(/#\/components\/schemas\/Gone/);
+  });
+
+  // Review on #48: a node may itself be a $ref alias to another component.
+  it('follows a component $ref alias reached through allOf', () => {
+    const schemas = {
+      Base,
+      BaseAlias: ref('Base'),
+      Req: { allOf: [ref('BaseAlias')] },
+    };
+    expect(optionalTenantIdInBody(schemas, 'Req')).toBe(true);
+  });
+
+  it('sees a requirement declared behind an alias', () => {
+    const schemas = {
+      Base,
+      Strict: { allOf: [ref('Base')], required: ['tenantId'] },
+      StrictAlias: ref('Strict'),
+      Req: { allOf: [ref('StrictAlias')] },
+    };
+    expect(optionalTenantIdInBody(schemas, 'Req')).toBe(false);
+  });
+
+  it('throws on an alias whose target does not resolve', () => {
+    const schemas = { Alias: ref('Gone'), Req: { allOf: [ref('Alias')] } };
+    expect(() => optionalTenantIdInBody(schemas, 'Req')).toThrow(/#\/components\/schemas\/Gone/);
+  });
+
+  it('throws on a cyclic alias chain', () => {
+    const schemas = { A: ref('B'), B: ref('A'), Req: { allOf: [ref('A')] } };
+    expect(() => optionalTenantIdInBody(schemas, 'Req')).toThrow(/cycl/i);
+  });
 });
