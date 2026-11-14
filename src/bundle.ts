@@ -1224,7 +1224,20 @@ export async function bundle(options: BundleOptions): Promise<BundleResult> {
           // (a cycle, which could never make progress anyway) — leaves the
           // $ref in place so the Step 5 guard reports it, uncounted.
           if (isParameterObject(resolved)) {
-            params[i] = JSON.parse(JSON.stringify(resolved));
+            const copy = JSON.parse(JSON.stringify(resolved)) as Record<
+              string,
+              unknown
+            >;
+            // A Reference Object may carry a `description` (and `summary`)
+            // sibling overriding the target's (OpenAPI 3.1; 3.0.x processors
+            // apply the same rule). Inlining must not discard that override.
+            const siblingDescription = (param as Record<string, unknown>)[
+              'description'
+            ];
+            if (typeof siblingDescription === 'string') {
+              copy['description'] = siblingDescription;
+            }
+            params[i] = copy;
             inlined++;
           }
         }
@@ -1290,7 +1303,20 @@ export async function bundle(options: BundleOptions): Promise<BundleResult> {
           // cycle) — leaves the $ref in place, uncounted, so the Step 5 guard
           // reports it.
           if (isResponseObject(resolved)) {
-            responses[status] = JSON.parse(JSON.stringify(resolved));
+            const copy = JSON.parse(JSON.stringify(resolved)) as Record<
+              string,
+              unknown
+            >;
+            // A Reference Object may carry a `description` (and `summary`)
+            // sibling overriding the target's (OpenAPI 3.1; 3.0.x processors
+            // apply the same rule). Inlining must not discard that override.
+            const siblingDescription = (
+              response as Record<string, unknown>
+            )['description'];
+            if (typeof siblingDescription === 'string') {
+              copy['description'] = siblingDescription;
+            }
+            responses[status] = copy;
             inlined++;
           }
         }

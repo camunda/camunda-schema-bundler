@@ -236,6 +236,61 @@ paths:
 });
 
 /**
+ * A Reference Object may carry a `description` (and `summary`) sibling that
+ * overrides the target's (OpenAPI 3.1; 3.0.x processors apply the same rule).
+ * Inlining the target over the whole entry must not discard that override —
+ * the transformation has to stay lossless.
+ */
+describe('description override on a path-local response $ref', () => {
+  let specDir: string;
+
+  beforeAll(() => {
+    specDir = fs.mkdtempSync(path.join(os.tmpdir(), 'bundler-response-override-'));
+    writeSpec(specDir, {
+      'rest-api.yaml': `openapi: '3.0.3'
+info:
+  title: Test API
+  version: '1.0.0'
+paths:
+  /a:
+    get:
+      operationId: opA
+      responses:
+        '200':
+          description: Shared description.
+          content:
+            text/plain:
+              schema:
+                type: string
+  /b:
+    get:
+      operationId: opB
+      responses:
+        '200':
+          $ref: '#/paths/~1a/get/responses/200'
+          description: Operation-specific description.
+`,
+    });
+  });
+
+  it('keeps the sibling description when inlining the referenced response', async () => {
+    const result = await bundle({ specDir });
+    const entries = collectResponseEntries(
+      result.spec as Record<string, unknown>
+    );
+    const b200 = entries.find(({ where }) => where === 'GET /b 200');
+    expect(b200?.response['$ref']).toBeUndefined();
+    expect(b200?.response['description']).toBe(
+      'Operation-specific description.'
+    );
+    // The rest of the target is still inlined.
+    expect(b200?.response['content']).toEqual({
+      'text/plain': { schema: { type: 'string' } },
+    });
+  });
+});
+
+/**
  * Bad targets: each must leave the `$ref` in place, uncounted, so the
  * survivor guard throws. Class-scoped across every way a pointer can fail to
  * land on a Response Object.
