@@ -1,3 +1,10 @@
+## [2.4.8](https://github.com/camunda/camunda-schema-bundler/compare/v2.4.7...v2.4.8) (2026-11-14)
+
+
+### Bug Fixes
+
+* inline path-local $refs in responses maps ([#44](https://github.com/camunda/camunda-schema-bundler/issues/44)) ([ab23d9e](https://github.com/camunda/camunda-schema-bundler/commit/ab23d9e5fee210bfdcb16374f8426b098004ba10)), closes [#39](https://github.com/camunda/camunda-schema-bundler/issues/39) [#41](https://github.com/camunda/camunda-schema-bundler/issues/41)
+
 ## [2.4.7](https://github.com/camunda/camunda-schema-bundler/compare/v2.4.6...v2.4.7) (2026-11-12)
 
 
