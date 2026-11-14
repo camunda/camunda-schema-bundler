@@ -707,22 +707,58 @@ function hasOptionalTenantId(
   /**
    * Every instance matches one branch of each deferred union, so the flag must
    * hold for EVERY branch combination under the full enclosing constraints.
-   * Every branch is collected (and its refs validated) before aggregating, so
-   * an unresolved or cyclic branch `$ref` throws regardless of position.
+   * To avoid materialising the Cartesian product (exponential in the number of
+   * sibling unions), summarise each conjunction by which failure modes are
+   * POSSIBLE in some combination: tenantId can end up required, the instance
+   * can end up with no `type: object` level, or tenantId can end up
+   * undeclared. Each branch is collected and summarised exactly once, so every
+   * branch `$ref` is still validated (unresolved/cyclic refs throw) regardless
+   * of position, and the cost is linear in the schema size.
    */
-  const evaluate = (acc: Acc): boolean => {
-    if (acc.unions.length === 0) return acc.isObject && acc.declared && !acc.required;
-    const [first, ...rest] = acc.unions;
-    const results = first.branches.map((branch) => {
-      if (!branch || typeof branch !== 'object') return false;
-      const next: Acc = { ...acc, unions: [...rest] };
-      collect(branch as Record<string, unknown>, first.chain, next);
-      return evaluate(next);
-    });
-    return results.every(Boolean);
+  interface Possible {
+    required: boolean;
+    nonObject: boolean;
+    undeclared: boolean;
+    invalid: boolean;
+  }
+  const summarise = (acc: Acc): Possible => {
+    const out: Possible = {
+      required: acc.required,
+      nonObject: !acc.isObject,
+      undeclared: !acc.declared,
+      invalid: false,
+    };
+    for (const union of acc.unions) {
+      // Union contributes "some branch makes this possible"; conjunction ORs
+      // `required`/`invalid` and ANDs the absence facts (a level being absent
+      // requires it to be absent in every conjunct).
+      let req = false;
+      let nonObj = false;
+      let undecl = false;
+      let invalid = false;
+      for (const branch of union.branches) {
+        if (!branch || typeof branch !== 'object') {
+          invalid = true;
+          continue;
+        }
+        const next: Acc = { isObject: false, declared: false, required: false, unions: [] };
+        collect(branch as Record<string, unknown>, union.chain, next);
+        const p = summarise(next);
+        req ||= p.required;
+        nonObj ||= p.nonObject;
+        undecl ||= p.undeclared;
+        invalid ||= p.invalid;
+      }
+      out.required ||= req;
+      out.nonObject &&= nonObj;
+      out.undeclared &&= undecl;
+      out.invalid ||= invalid;
+    }
+    return out;
   };
 
   const acc: Acc = { isObject: false, declared: false, required: false, unions: [] };
   collect(schema, [], acc);
-  return evaluate(acc);
+  const p = summarise(acc);
+  return !p.required && !p.nonObject && !p.undeclared && !p.invalid;
 }

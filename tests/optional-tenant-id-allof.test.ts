@@ -460,4 +460,49 @@ describe('optionalTenantIdInBody through allOf (#47)', () => {
       /#\/components\/schemas\/Gone/
     );
   });
+
+  // Sibling unions are independent choices: summarising them must not
+  // enumerate the Cartesian product (2^40 combinations here), yet must stay
+  // exhaustive — every branch is still validated.
+  const manyUnions = (n: number, last: Record<string, unknown>) => ({
+    allOf: [
+      ref('Base'),
+      ...Array.from({ length: n - 1 }, () => ({
+        oneOf: [{ type: 'object' }, { type: 'object' }],
+      })),
+      { oneOf: [{ type: 'object' }, last] },
+    ],
+  });
+
+  it('evaluates many sibling unions without combinatorial blow-up', () => {
+    const start = Date.now();
+    expect(optionalTenantIdInBody({ Base, Req: manyUnions(40, { type: 'object' }) }, 'Req')).toBe(true);
+    // Generous bound: a safety net against exponential evaluation, not a timing assertion.
+    expect(Date.now() - start).toBeLessThan(5000);
+  });
+
+  it('is false when the last of many sibling unions has a branch requiring tenantId', () => {
+    expect(
+      optionalTenantIdInBody({ Base, Req: manyUnions(40, { required: ['tenantId'] }) }, 'Req')
+    ).toBe(false);
+  });
+
+  it('throws on an unresolved $ref in the last of many sibling unions', () => {
+    expect(() =>
+      optionalTenantIdInBody({ Base, Req: manyUnions(40, ref('Gone')) }, 'Req')
+    ).toThrow(/#\/components\/schemas\/Gone/);
+  });
+
+  it('is false when tenantId is declared only in a branch of one of two sibling unions', () => {
+    const schemas = {
+      Req: {
+        allOf: [
+          { oneOf: [{ type: 'object', properties: { tenantId: {} } }, { type: 'object' }] },
+          { anyOf: [{ type: 'object' }, { type: 'object', properties: { tenantId: {} } }] },
+        ],
+      },
+    };
+    // Combination (second branch, first branch) never declares tenantId.
+    expect(optionalTenantIdInBody(schemas, 'Req')).toBe(false);
+  });
 });
