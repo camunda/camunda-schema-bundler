@@ -296,6 +296,13 @@ paths:
     );
   });
 
+  it('still throws when dereferencePathLocalRefs is enabled', async () => {
+    // Step 4 dereferencing must not erase the rejected ref before the guard.
+    await expect(
+      bundle({ specDir, dereferencePathLocalRefs: true })
+    ).rejects.toThrow(/survived in responses maps[\s\S]*GET \/b 200/);
+  });
+
   it('leaves the $ref in place, uncounted, when bypassed', async () => {
     const result = await bundle({ specDir, allowPathLocalResponseRefs: true });
     const entries = collectResponseEntries(
@@ -342,6 +349,60 @@ paths:
 
   it('never counts a response it did not actually inline', async () => {
     const result = await bundle({ specDir, allowPathLocalResponseRefs: true });
+    expect(result.stats.inlinedPathLocalResponseCount).toBe(0);
+  });
+});
+
+/**
+ * `x-*` extension entries — under `paths`, inside a Path Item, and inside a
+ * `responses` map — are not responses and must be neither rewritten nor
+ * rejected, even when they carry a path-local `$ref` to a non-response.
+ */
+describe('x-* extensions carrying path-local $refs', () => {
+  let specDir: string;
+  const badRef = '#/paths/~1a/get/responses/200/description';
+  const goodRef = '#/paths/~1a/get/responses/200';
+
+  beforeAll(() => {
+    specDir = fs.mkdtempSync(path.join(os.tmpdir(), 'bundler-response-ext-'));
+    writeSpec(specDir, {
+      'rest-api.yaml': `openapi: '3.0.3'
+info:
+  title: Test API
+  version: '1.0.0'
+paths:
+  x-paths-ext:
+    get:
+      responses:
+        '200':
+          $ref: '${badRef}'
+  /a:
+    x-item-ext:
+      responses:
+        '200':
+          $ref: '${goodRef}'
+    get:
+      operationId: opA
+      responses:
+        '200':
+          description: OK
+          x-resp-ext:
+            $ref: '${badRef}'
+        x-map-bad:
+          $ref: '${badRef}'
+        x-map-good:
+          $ref: '${goodRef}'
+`,
+    });
+  });
+
+  it('neither rejects nor rewrites extension data', async () => {
+    const result = await bundle({ specDir });
+    const spec = result.spec as Record<string, any>;
+    expect(spec.paths['x-paths-ext'].get.responses['200'].$ref).toBe(badRef);
+    expect(spec.paths['/a']['x-item-ext'].responses['200'].$ref).toBe(goodRef);
+    expect(spec.paths['/a'].get.responses['x-map-bad'].$ref).toBe(badRef);
+    expect(spec.paths['/a'].get.responses['x-map-good'].$ref).toBe(goodRef);
     expect(result.stats.inlinedPathLocalResponseCount).toBe(0);
   });
 });
