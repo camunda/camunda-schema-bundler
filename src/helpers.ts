@@ -143,6 +143,62 @@ export function resolveInternalRef(
   return cur;
 }
 
+/**
+ * Follow a terminal hop: if `node` is itself an internal `$ref`, resolve that
+ * ref (against `snapshot` first, then `fallback`), repeating until the node
+ * is no longer a reference.
+ *
+ * The snapshots the inlining passes resolve against are taken before any
+ * inlining, so a ref whose target is another ref (an acyclic chain such as
+ * `/c` → `/b` → `/a`) still sees the intermediate reference. Without
+ * following the terminal hop the chain can never make progress and the
+ * survivor guard rejects it.
+ *
+ * Cycle-safe: a hop set bounds the walk, so a reference cycle terminates as
+ * `undefined` (the caller leaves the ref in place for the survivor guard)
+ * instead of recursing forever. A hop that cannot be resolved also
+ * terminates as `undefined`.
+ *
+ * Two optional refinements, both motivated by the fact that the intermediate
+ * references are real OpenAPI nodes, not transparent aliases:
+ *
+ * - `requirePosition`: when given, EVERY hop's pointer must satisfy it —
+ *   the initial node's own position was already checked by the caller, but a
+ *   hop may lead anywhere: into an `x-*` extension, or into a nested schema
+ *   position that merely ends in a `responses`/`parameters`-shaped suffix.
+ *   A hop that fails the check resolves the whole walk to `undefined`, so
+ *   the caller leaves the original ref in place for the survivor guard.
+ *
+ * - Intermediate `description` siblings: each reference in the chain may
+ *   carry a `description` overriding its target's. The nearest reference to
+ *   the use site wins, so the FIRST sibling encountered along the walk is
+ *   returned as `description` for the caller to apply when the use-site
+ *   reference carries none of its own.
+ */
+export function resolveTerminalRef(
+  snapshot: Record<string, unknown>,
+  fallback: Record<string, unknown>,
+  node: unknown,
+  requirePosition?: (ref: string) => boolean
+): { node: unknown; description?: string } {
+  const hops = new Set<string>();
+  let cur = node;
+  let description: string | undefined;
+  while (cur && typeof cur === 'object' && !Array.isArray(cur)) {
+    const obj = cur as Record<string, unknown>;
+    const ref = obj['$ref'];
+    if (typeof ref !== 'string' || !ref.startsWith('#/')) break;
+    if (hops.has(ref)) return { node: undefined }; // reference cycle
+    hops.add(ref);
+    if (requirePosition && !requirePosition(ref)) return { node: undefined };
+    if (description === undefined && typeof obj['description'] === 'string')
+      description = obj['description'] as string;
+    cur =
+      resolveInternalRef(snapshot, ref) ?? resolveInternalRef(fallback, ref);
+  }
+  return description === undefined ? { node: cur } : { node: cur, description };
+}
+
 const COMPONENT_SCHEMA_REF = /^#\/components\/schemas\/([^/]+)$/;
 const COMPONENT_INTERIOR_SCHEMA_REF = /^#\/components\/schemas\/[^/]+\/./;
 
@@ -392,6 +448,18 @@ export function sortRequiredArrays(root: unknown): void {
   }
 }
 
+/** Path Item keys that hold Operation Objects. */
+const HTTP_METHODS = new Set([
+  'get',
+  'put',
+  'post',
+  'delete',
+  'options',
+  'head',
+  'patch',
+  'trace',
+]);
+
 /**
  * Visit every `parameters` array reachable under `paths`, at both the
  * path-item level (`paths./foo.parameters`) and the operation level
@@ -413,6 +481,7 @@ export function forEachParameterArray(
   for (const [apiPath, itemRaw] of Object.entries(
     paths as Record<string, unknown>
   )) {
+    if (apiPath.startsWith('x-')) continue;
     if (!itemRaw || typeof itemRaw !== 'object') continue;
     for (const [key, valueRaw] of Object.entries(
       itemRaw as Record<string, unknown>
@@ -421,6 +490,9 @@ export function forEachParameterArray(
         if (Array.isArray(valueRaw)) visit(valueRaw, apiPath);
         continue;
       }
+      // Only HTTP-method keys hold Operation Objects; `x-*` extensions and
+      // other Path Item fields are not traversed.
+      if (!HTTP_METHODS.has(key)) continue;
       if (!valueRaw || typeof valueRaw !== 'object' || Array.isArray(valueRaw))
         continue;
       const params = (valueRaw as Record<string, unknown>)['parameters'];
@@ -448,6 +520,68 @@ export function findPathLocalParameterRefs(
       const ref = (param as Record<string, unknown>)['$ref'];
       if (typeof ref === 'string' && ref.startsWith('#/paths/'))
         found.push(`${where} -> ${ref}`);
+    }
+  });
+  return found;
+}
+
+/**
+ * Visit every operation-level `responses` map reachable under `paths`
+ * (`paths./foo.get.responses`).
+ *
+ * Same traversal scope as {@link forEachParameterArray}: `webhooks`,
+ * `components.pathItems`, and operation `callbacks` are not traversed. The
+ * bundled Camunda spec has none; broaden this (and its callers) if that
+ * changes.
+ *
+ * The callback receives the map itself (mutable in place) and a
+ * human-readable location for diagnostics.
+ */
+export function forEachResponsesMap(
+  root: Record<string, unknown>,
+  visit: (responses: Record<string, unknown>, where: string) => void
+): void {
+  const paths = root['paths'];
+  if (!paths || typeof paths !== 'object') return;
+  for (const [apiPath, itemRaw] of Object.entries(
+    paths as Record<string, unknown>
+  )) {
+    if (apiPath.startsWith('x-')) continue;
+    if (!itemRaw || typeof itemRaw !== 'object') continue;
+    for (const [key, opRaw] of Object.entries(
+      itemRaw as Record<string, unknown>
+    )) {
+      // Only HTTP-method keys hold Operation Objects (skips `x-*` extensions).
+      if (!HTTP_METHODS.has(key)) continue;
+      if (!opRaw || typeof opRaw !== 'object' || Array.isArray(opRaw)) continue;
+      const responses = (opRaw as Record<string, unknown>)['responses'];
+      if (responses && typeof responses === 'object' && !Array.isArray(responses))
+        visit(
+          responses as Record<string, unknown>,
+          `${key.toUpperCase()} ${apiPath}`
+        );
+    }
+  }
+}
+
+/**
+ * Collect surviving path-local `$refs` used as `responses` map values, within
+ * the traversal scope of {@link forEachResponsesMap}.
+ *
+ * Should be empty after the inlining pass in `bundle()` (Step 3e); a non-empty
+ * result means a ref could not be resolved to a Response Object.
+ */
+export function findPathLocalResponseRefs(
+  root: Record<string, unknown>
+): string[] {
+  const found: string[] = [];
+  forEachResponsesMap(root, (responses, where) => {
+    for (const [status, response] of Object.entries(responses)) {
+      if (status.startsWith('x-')) continue; // extension, not a response
+      if (!response || typeof response !== 'object') continue;
+      const ref = (response as Record<string, unknown>)['$ref'];
+      if (typeof ref === 'string' && ref.startsWith('#/paths/'))
+        found.push(`${where} ${status} -> ${ref}`);
     }
   });
   return found;

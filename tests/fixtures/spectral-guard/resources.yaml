@@ -19,6 +19,8 @@ paths:
       responses:
         '200':
           description: OK
+        '504':
+          $ref: 'search-models.yaml#/components/responses/GatewayTimeout'
   /resources/{key}/effective-variables/search:
     post:
       operationId: searchResourceEffectiveVariables
@@ -36,6 +38,8 @@ paths:
       responses:
         '200':
           description: OK
+        '504':
+          $ref: 'search-models.yaml#/components/responses/GatewayTimeout'
   /resources/{key}:
     delete:
       operationId: deleteResource
@@ -48,6 +52,8 @@ paths:
       responses:
         '204':
           description: Deleted
+        '504':
+          $ref: 'search-models.yaml#/components/responses/GatewayTimeout'
 components:
   schemas:
     # Two structurally identical sort aliases: SwaggerParser dedupes the shared

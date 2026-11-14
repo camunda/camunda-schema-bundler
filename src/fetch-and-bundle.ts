@@ -38,6 +38,7 @@ export async function fetchAndBundle(
     dereferencePathLocalRefs: options.dereferencePathLocalRefs,
     allowPathLocalLikeRefs: options.allowPathLocalLikeRefs,
     allowPathLocalParameterRefs: options.allowPathLocalParameterRefs,
+    allowPathLocalResponseRefs: options.allowPathLocalResponseRefs,
     allowComponentInteriorRefs: options.allowComponentInteriorRefs,
     allowAmbiguousInlines: options.allowAmbiguousInlines,
   });

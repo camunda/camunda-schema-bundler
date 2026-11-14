@@ -4,6 +4,15 @@ info:
   version: '1.0.0'
 paths: {}
 components:
+  responses:
+    # Shared across operations and files: SwaggerParser drops
+    # components.responses and dedupes reuses into path-local $refs (#34).
+    GatewayTimeout:
+      description: The request timed out between the gateway and the broker.
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/ProblemDetail'
   parameters:
     # Shared across operations and files: SwaggerParser drops
     # components.parameters and dedupes reuses into path-local $refs.
@@ -22,6 +31,11 @@ components:
       schema:
         type: boolean
   schemas:
+    ProblemDetail:
+      type: object
+      properties:
+        title:
+          type: string
     SortOrderEnum:
       type: string
       enum: [ASC, DESC]

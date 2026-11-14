@@ -17,11 +17,14 @@ import {
   rewriteInternalRefs,
   rewriteExternalRefsToLocal,
   resolveInternalRef,
+  resolveTerminalRef,
   canonicalStringify,
   structuralStringify,
   findPathLocalLikeRefs,
   forEachParameterArray,
   findPathLocalParameterRefs,
+  forEachResponsesMap,
+  findPathLocalResponseRefs,
   sortRequiredArrays,
   collapseComponentInteriorRefs,
 } from './helpers.js';
@@ -882,6 +885,7 @@ export async function bundle(options: BundleOptions): Promise<BundleResult> {
     pathLocalLikeRefCount: 0,
     componentSubtreeRefsCollapsed: 0,
     inlinedPathLocalParameterCount: 0,
+    inlinedPathLocalResponseCount: 0,
     collapsedComponentInteriorRefCount: 0,
     componentInteriorRefCount: 0,
   };
@@ -1203,6 +1207,20 @@ export async function bundle(options: BundleOptions): Promise<BundleResult> {
       return typeof p['name'] === 'string' && typeof p['in'] === 'string';
     };
 
+    // A parameter target must live in a `parameters` position
+    // (`#/paths/<path>/<method>/parameters/<i>`, Path-Item-level
+    // `#/paths/<path>/parameters/<i>`, or `#/components/parameters/<name>`).
+    // `<path>` must be an API path (a `/`-prefixed key, JSON-pointer-encoded
+    // as `~1`); any other key under `paths` is an `x-*` extension. This is
+    // the same context distinction Step 3e applies to responses. The method segment must be a real HTTP method:
+    // `x-*` extensions are arbitrary data, and a pointer that merely ENDS in
+    // `/parameters/<i>` (e.g. into an example payload) is not a parameters
+    // position either.
+    const PARAMETER_TARGET_REF =
+      /^#\/(?:components\/parameters\/[^/]+|paths\/~1[^/]*(?:\/(?:get|put|post|delete|options|head|patch|trace))?\/parameters\/\d+)$/;
+    const isParameterTargetRef = (ref: string): boolean =>
+      PARAMETER_TARGET_REF.test(ref);
+
     for (let pass = 1; pass <= 20; pass++) {
       let inlined = 0;
       forEachParameterArray(bundled, (params) => {
@@ -1212,16 +1230,45 @@ export async function bundle(options: BundleOptions): Promise<BundleResult> {
           const ref = (param as Record<string, unknown>)['$ref'] as string;
           // Prefer the post-normalization source (normalized $like refs,
           // promoted schemas); fall back to pre-normalization if the path was
-          // removed during normalization.
-          const resolved =
-            resolveInternalRef(postNormSnapshot as Record<string, unknown>, ref) ??
-            resolveInternalRef(preNormSnapshot as Record<string, unknown>, ref);
+          // removed during normalization. Follow terminal hops: the snapshots
+          // predate inlining, so an acyclic chain's target is still the
+          // intermediate reference. Cycle-safe: a cycle resolves to undefined.
+          // The walk only starts from — and only continues through — pointers
+          // that are themselves parameters positions: a chain may otherwise
+          // lead into an `x-*` extension or transit a non-parameter position
+          // to launder a non-parameter target.
+          const hopWalk = isParameterTargetRef(ref)
+            ? resolveTerminalRef(
+                postNormSnapshot as Record<string, unknown>,
+                preNormSnapshot as Record<string, unknown>,
+                resolveInternalRef(postNormSnapshot as Record<string, unknown>, ref) ??
+                  resolveInternalRef(preNormSnapshot as Record<string, unknown>, ref),
+                isParameterTargetRef
+              )
+            : { node: undefined };
+          const resolved = hopWalk.node;
+          const intermediateDescription = hopWalk.description;
           // Only substitute something that is actually a parameter. Anything
-          // else — a primitive, a response object, or another path-local ref
-          // (a cycle, which could never make progress anyway) — leaves the
-          // $ref in place so the Step 5 guard reports it, uncounted.
+          // else — a primitive, a response object, or a reference cycle —
+          // leaves the $ref in place so the Step 5 guard reports it,
+          // uncounted.
           if (isParameterObject(resolved)) {
-            params[i] = JSON.parse(JSON.stringify(resolved));
+            const copy = JSON.parse(JSON.stringify(resolved)) as Record<
+              string,
+              unknown
+            >;
+            // A Reference Object may carry a `description` sibling overriding
+            // the target's (OpenAPI 3.1; 3.0.x processors apply the same
+            // rule). Inlining must not discard that override: the use-site
+            // reference's own sibling wins, then the nearest intermediate
+            // reference's, then the terminal parameter's. `summary` is NOT
+            // copied — a Parameter Object has no such field, so emitting it
+            // would turn a valid reference into invalid output.
+            const override =
+              (param as Record<string, unknown>)['description'] ??
+              intermediateDescription;
+            if (typeof override === 'string') copy['description'] = override;
+            params[i] = copy;
             inlined++;
           }
         }
@@ -1233,9 +1280,196 @@ export async function bundle(options: BundleOptions): Promise<BundleResult> {
     }
   }
 
+  // ── Step 3e: Always inline path-local $refs used as `responses` values ────
+  //
+  // Same mechanism as Step 3d, for `components.responses`: the section does
+  // not survive bundling, so every reuse of a shared response becomes a
+  // path-local $ref to whichever operation SwaggerParser emitted first:
+  //
+  //   GET /agent-definitions/{agentDefinitionKey}:
+  //     responses:
+  //       '401': { $ref: '#/paths/~1clock/get/responses/401' }
+  //
+  // The real Camunda spec carries hundreds of these. Consumers that only
+  // resolve `#/components/...` pointers (e.g. api-test-generator) silently drop
+  // the response.
+  //
+  // Response Objects are never emitted as named types by any generator — the
+  // schemas inside them are, and those keep their `#/components/schemas/*`
+  // refs through the deep copy — so inlining is lossless and done
+  // unconditionally, for the same reason as Step 3d.
+  {
+    const isPathLocalRef = (node: unknown): boolean => {
+      if (!node || typeof node !== 'object' || Array.isArray(node)) return false;
+      const ref = (node as Record<string, unknown>)['$ref'];
+      return typeof ref === 'string' && ref.startsWith('#/paths/');
+    };
+
+    // A Response Object requires `description` and allows only these fields
+    // (plus `x-` extensions). Checking the full key set, not just
+    // `description`, is what rejects a Parameter or Schema Object a bad
+    // pointer may land on — both of which may also carry a `description`.
+    const RESPONSE_KEYS = new Set(['description', 'headers', 'content', 'links']);
+    const isResponseObject = (node: unknown): boolean => {
+      if (!node || typeof node !== 'object' || Array.isArray(node)) return false;
+      const r = node as Record<string, unknown>;
+      return (
+        typeof r['description'] === 'string' &&
+        Object.keys(r).every((k) => RESPONSE_KEYS.has(k) || k.startsWith('x-'))
+      );
+    };
+
+    // Shape alone cannot distinguish a Response Object from an
+    // annotation-only Schema Object (`{ description: '…' }` is valid as
+    // both). The target's OpenAPI context can: a response target must live
+    // under a `responses` map (`#/paths/<path>/<method>/responses/<status>`
+    // or `#/components/responses/<name>`). The method segment must be a real
+    // HTTP method and the key a real status code — `x-*` extensions are
+    // arbitrary data — and a pointer that merely ENDS in
+    // `/responses/<status>` (e.g. a nested schema position) is not a
+    // response position.
+    const RESPONSE_TARGET_REF =
+      /^#\/(?:components\/responses\/[^/]+|paths\/~1[^/]*\/(?:get|put|post|delete|options|head|patch|trace)\/responses\/(?!x-)[^/]+)$/;
+    const isResponseTargetRef = (ref: string): boolean =>
+      RESPONSE_TARGET_REF.test(ref);
+
+    for (let pass = 1; pass <= 20; pass++) {
+      let inlined = 0;
+      forEachResponsesMap(bundled, (responses) => {
+        for (const [status, response] of Object.entries(responses)) {
+          if (status.startsWith('x-')) continue; // extension, not a response
+          if (!isPathLocalRef(response)) continue;
+          const ref = (response as Record<string, unknown>)['$ref'] as string;
+          // Follow terminal hops: the snapshots predate inlining, so the
+          // target of an acyclic chain (`/c` → `/b` → `/a`) is still `/b`'s
+          // reference. Cycle-safe: a cycle resolves to undefined and is left
+          // for the survivor guard. The walk only starts from — and only
+          // continues through — pointers that are themselves response
+          // positions: a chain may otherwise lead into an `x-*` extension or
+          // transit a schema position to launder a non-response target.
+          const hopWalk = isResponseTargetRef(ref)
+            ? resolveTerminalRef(
+                postNormSnapshot as Record<string, unknown>,
+                preNormSnapshot as Record<string, unknown>,
+                resolveInternalRef(postNormSnapshot as Record<string, unknown>, ref) ??
+                  resolveInternalRef(preNormSnapshot as Record<string, unknown>, ref),
+                isResponseTargetRef
+              )
+            : { node: undefined };
+          const resolved = hopWalk.node;
+          const intermediateDescription = hopWalk.description;
+          // Anything that is not a Response Object — a primitive, another
+          // object type, a missing target, or a reference cycle — leaves the
+          // $ref in place, uncounted, so the Step 5 guard reports it. The
+          // context check rejects a structurally identical Schema Object.
+          if (isResponseObject(resolved)) {
+            const copy = JSON.parse(JSON.stringify(resolved)) as Record<
+              string,
+              unknown
+            >;
+            // A Reference Object may carry a `description` sibling overriding
+            // the target's (OpenAPI 3.1; 3.0.x processors apply the same
+            // rule). Inlining must not discard that override: the use-site
+            // reference's own sibling wins, then the nearest intermediate
+            // reference's, then the terminal response's. `summary` is NOT
+            // copied — a Response Object has no such field, so emitting it
+            // would turn a valid reference into invalid output.
+            const override =
+              (response as Record<string, unknown>)['description'] ??
+              intermediateDescription;
+            if (typeof override === 'string') copy['description'] = override;
+            responses[status] = copy;
+            inlined++;
+          }
+        }
+      });
+      stats.inlinedPathLocalResponseCount += inlined;
+      if (inlined === 0) break;
+    }
+  }
+
+  // These guards run BEFORE Step 4: dereferencing would otherwise replace
+  // the rejected refs with their (invalid) targets and hide them.
+  //
+  // Step 3d should have inlined all of these. A survivor means the pointer
+  // could not be resolved, so the bundle is one no generator can consume —
+  // fail loudly rather than emit it.
+  const survivingParameterRefs = findPathLocalParameterRefs(bundled);
+  if (
+    survivingParameterRefs.length > 0 &&
+    !options.allowPathLocalParameterRefs
+  ) {
+    throw new Error(
+      `${survivingParameterRefs.length} path-local $ref(s) survived inside parameters arrays:\n` +
+        survivingParameterRefs.map((r) => `  ${r}`).join('\n') +
+        `\n\nThese cannot be resolved by openapi-generator or Microsoft.OpenApi and cause ` +
+        `"duplicate parameter values" failures. Set allowPathLocalParameterRefs ` +
+        `(CLI: --allow-param-refs) to bypass.`
+    );
+  }
+
+  // Step 3e should have inlined all of these. A survivor points at something
+  // that is not a Response Object, so fail loudly rather than emit it.
+  const survivingResponseRefs = findPathLocalResponseRefs(bundled);
+  if (
+    survivingResponseRefs.length > 0 &&
+    !options.allowPathLocalResponseRefs
+  ) {
+    throw new Error(
+      `${survivingResponseRefs.length} path-local $ref(s) survived in responses maps ` +
+        `and could not be inlined (target is missing, cyclic, or not a Response Object):\n` +
+        survivingResponseRefs.map((r) => `  ${r}`).join('\n') +
+        `\n\nConsumers that only resolve #/components/... pointers drop these responses. ` +
+        `Set allowPathLocalResponseRefs (CLI: --allow-response-refs) to bypass.`
+    );
+  }
+
   // ── Step 4: Optionally dereference remaining path-local $refs ─────────────
 
   if (options.dereferencePathLocalRefs) {
+    // A Reference Object may carry `summary`/`description` siblings
+    // overriding the target's (OpenAPI 3.1; 3.0.x processors apply the same
+    // rule). Expanding the ref must not discard those overrides — the
+    // snapshots predate the inlining passes, so an aliased Path Item still
+    // contains the reference with its siblings, and a naive expansion would
+    // lose them.
+    //
+    // `summary` is only copied when the resolved target supports the field
+    // (a Path Item or Operation Object does; a Response or Parameter Object
+    // does not — copying it there would emit invalid output, the same rule
+    // Steps 3d/3e apply). `description` is supported by every object this
+    // expander can land on.
+    // Path Item (`#/paths/<path>`) or Operation
+    // (`#/paths/<path>/<method>`) positions — the only targets supporting
+    // `summary`.
+    const SUMMARY_TARGET_REF =
+      /^#\/paths\/~1[^/]*(?:\/(?:get|put|post|delete|options|head|patch|trace))?$/;
+    const expand = (
+      refNode: Record<string, unknown>
+    ): Record<string, unknown> | undefined => {
+      const ref = refNode['$ref'] as string;
+      const resolved =
+        resolveInternalRef(postNormSnapshot as Record<string, unknown>, ref) ??
+        resolveInternalRef(preNormSnapshot as Record<string, unknown>, ref);
+      if (!resolved || typeof resolved !== 'object' || Array.isArray(resolved))
+        return undefined;
+      const copy = JSON.parse(JSON.stringify(resolved)) as Record<
+        string,
+        unknown
+      >;
+      // Decided by the pointer's position, not the target's shape: a Path
+      // Item with only method children carries none of the shape markers.
+      const targetSupportsSummary = SUMMARY_TARGET_REF.test(ref);
+      const siblings = targetSupportsSummary
+        ? (['summary', 'description'] as const)
+        : (['description'] as const);
+      for (const sibling of siblings) {
+        const override = refNode[sibling];
+        if (typeof override === 'string') copy[sibling] = override;
+      }
+      return copy;
+    };
+
     for (let pass = 1; pass <= 20; pass++) {
       let dereferenced = 0;
       const seen = new Set<unknown>();
@@ -1257,17 +1491,9 @@ export async function bundle(options: BundleOptions): Promise<BundleResult> {
             ) {
               // Prefer post-normalization source (normalized $like, promoted schemas);
               // fall back to pre-normalization if the path was removed during normalization
-              const resolved =
-                resolveInternalRef(
-                  postNormSnapshot as Record<string, unknown>,
-                  item['$ref'] as string
-                ) ??
-                resolveInternalRef(
-                  preNormSnapshot as Record<string, unknown>,
-                  item['$ref'] as string
-                );
-              if (resolved) {
-                node[i] = JSON.parse(JSON.stringify(resolved));
+              const expanded = expand(item);
+              if (expanded) {
+                node[i] = expanded;
                 dereferenced++;
               }
             }
@@ -1282,17 +1508,9 @@ export async function bundle(options: BundleOptions): Promise<BundleResult> {
               typeof valObj['$ref'] === 'string' &&
               (valObj['$ref'] as string).startsWith('#/paths/')
             ) {
-              const resolved =
-                resolveInternalRef(
-                  postNormSnapshot as Record<string, unknown>,
-                  valObj['$ref'] as string
-                ) ??
-                resolveInternalRef(
-                  preNormSnapshot as Record<string, unknown>,
-                  valObj['$ref'] as string
-                );
-              if (resolved) {
-                obj[key] = JSON.parse(JSON.stringify(resolved));
+              const expanded = expand(valObj);
+              if (expanded) {
+                obj[key] = expanded;
                 dereferenced++;
               }
             }
@@ -1411,23 +1629,6 @@ export async function bundle(options: BundleOptions): Promise<BundleResult> {
     throw new Error(
       `${stats.pathLocalLikeRefCount} path-local $like ref(s) survived normalization. ` +
         `This will cause generator failures. Set allowPathLocalLikeRefs to bypass.`
-    );
-  }
-
-  // Step 3d should have inlined all of these. A survivor means the pointer
-  // could not be resolved, so the bundle is one no generator can consume —
-  // fail loudly rather than emit it.
-  const survivingParameterRefs = findPathLocalParameterRefs(bundled);
-  if (
-    survivingParameterRefs.length > 0 &&
-    !options.allowPathLocalParameterRefs
-  ) {
-    throw new Error(
-      `${survivingParameterRefs.length} path-local $ref(s) survived inside parameters arrays:\n` +
-        survivingParameterRefs.map((r) => `  ${r}`).join('\n') +
-        `\n\nThese cannot be resolved by openapi-generator or Microsoft.OpenApi and cause ` +
-        `"duplicate parameter values" failures. Set allowPathLocalParameterRefs ` +
-        `(CLI: --allow-param-refs) to bypass.`
     );
   }
 
