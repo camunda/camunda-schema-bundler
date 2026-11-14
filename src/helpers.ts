@@ -102,10 +102,12 @@ export function rewriteExternalRefsToLocal(root: unknown): void {
 }
 
 /**
- * Decode a JSON Pointer segment.
+ * Decode a JSON Pointer segment taken from a URI fragment. Per RFC 6901 §6
+ * the fragment is URI-decoded FIRST, then the pointer escapes are unescaped
+ * (`~1` before `~0`), so `%7E1` yields `/` and `~01` yields `~1`.
  */
 export function jsonPointerDecode(segment: string): string {
-  return decodeURIComponent(segment.replace(/~1/g, '/').replace(/~0/g, '~'));
+  return decodeURIComponent(segment).replace(/~1/g, '/').replace(/~0/g, '~');
 }
 
 /**

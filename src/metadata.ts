@@ -22,7 +22,6 @@ import type {
   DeprecatedEnumMemberEntry,
   SemanticProviderEntry,
 } from './types.js';
-import { jsonPointerDecode } from './helpers.js';
 
 const HTTP_METHODS = ['get', 'post', 'put', 'patch', 'delete', 'head', 'options', 'trace'] as const;
 
@@ -473,24 +472,14 @@ function extractOperations(
                   requestBodyUnionRefs.push(refName);
                 }
               }
-              // optionalTenantIdInBody: true only if ALL variants have optional
-              // tenantId. Each variant is evaluated together with the
-              // wrapper's own properties/required/allOf, which apply to every
-              // variant (a wrapper-level `required: [tenantId]` makes it
-              // mandatory throughout). Evaluate EVERY variant before
-              // aggregating: a short-circuiting `every` would spare later
-              // variants from validation, making unresolved/cyclic refs
-              // order-dependent.
-              const variantResults = variants.map((v) =>
-                hasOptionalTenantId([schema, v], componentSchemas)
-              );
-              if (variantResults.every(Boolean)) {
-                optionalTenantIdInBody = true;
-              }
-            } else {
-              if (hasOptionalTenantId([schema], componentSchemas)) {
-                optionalTenantIdInBody = true;
-              }
+            }
+            // optionalTenantIdInBody: true only if tenantId is optional for
+            // EVERY instance. hasOptionalTenantId evaluates the schema's own
+            // union itself (each branch under the wrapper's constraints,
+            // every branch validated before aggregating), so the wrapper is
+            // walked exactly once.
+            if (hasOptionalTenantId(schema, componentSchemas)) {
+              optionalTenantIdInBody = true;
             }
           }
         }
@@ -640,7 +629,7 @@ function resolveComponentRef(
  * would silently change SDK behaviour.
  */
 function hasOptionalTenantId(
-  schemas: Record<string, unknown>[],
+  schema: Record<string, unknown>,
   componentSchemas: Record<string, unknown>
 ): boolean {
   const prefix = '#/components/schemas/';
@@ -660,7 +649,14 @@ function hasOptionalTenantId(
     // interior pointer means the flag cannot be computed, and guessing would
     // silently change SDK behaviour.
     const rest = ref.startsWith(prefix) ? ref.slice(prefix.length) : undefined;
-    const name = rest !== undefined && !rest.includes('/') ? jsonPointerDecode(rest) : undefined;
+    // RFC 6901 §6: URI-decode the fragment FIRST, then split on `/` and
+    // unescape pointer tokens — so `%7E1` is `~1` → `/`, and `%2F` is a
+    // segment separator (an interior pointer, rejected).
+    const decoded = rest !== undefined ? decodeURIComponent(rest) : undefined;
+    const name =
+      decoded !== undefined && !decoded.includes('/')
+        ? decoded.replace(/~1/g, '/').replace(/~0/g, '~')
+        : undefined;
     const target = name !== undefined ? componentSchemas[name] : undefined;
     if (!target || typeof target !== 'object') {
       throw new Error(
@@ -672,89 +668,61 @@ function hasOptionalTenantId(
   };
 
   /**
-   * Conjunctive walk: `node`'s own constraints plus everything that applies to
-   * every instance alongside it — its own `$ref` (component alias) and its
-   * `allOf` members — returning what that subtree establishes about tenantId.
-   * A nested `oneOf`/`anyOf` still constrains the body (every instance matches
-   * one branch), so the flag must hold for EVERY branch under the enclosing
-   * constraints; a branch that cannot guarantee an optional tenantId vetoes
-   * the whole union. Every branch is walked before aggregating, so an
-   * unresolved or cyclic branch `$ref` throws regardless of position.
+   * Conjunctive collection: accumulate what `node` and everything that applies
+   * to every instance alongside it (its own `$ref` alias and its `allOf`
+   * members, recursively) establish about tenantId. Nested `oneOf`/`anyOf`
+   * are NOT evaluated in place: they are deferred, so each branch is later
+   * evaluated against the COMPLETE set of enclosing conjuncts — including
+   * siblings that appear after the union or in an outer `allOf`.
    */
-  interface WalkState {
+  interface Acc {
     isObject: boolean;
     declared: boolean;
     required: boolean;
+    unions: { branches: unknown[]; chain: string[] }[];
   }
-  const walk = (node: Record<string, unknown>, chain: string[]): WalkState => {
-    let isObject = node['type'] === 'object';
+  const collect = (node: Record<string, unknown>, chain: string[], acc: Acc): void => {
+    if (node['type'] === 'object') acc.isObject = true;
     const props = node['properties'] as Record<string, unknown> | undefined;
-    let declared = !!(props && props['tenantId']);
+    if (props && props['tenantId']) acc.declared = true;
     const req = node['required'];
-    let required = Array.isArray(req) && req.includes('tenantId');
+    if (Array.isArray(req) && req.includes('tenantId')) acc.required = true;
 
     const ownRef = node['$ref'];
     if (typeof ownRef === 'string') {
-      const r = walk(follow(ownRef, chain), [...chain, ownRef]);
-      isObject ||= r.isObject;
-      declared ||= r.declared;
-      required ||= r.required;
+      collect(follow(ownRef, chain), [...chain, ownRef], acc);
     }
-
     const allOf = node['allOf'];
     if (Array.isArray(allOf)) {
-      for (const member of allOf as Record<string, unknown>[]) {
+      for (const member of allOf) {
         if (member && typeof member === 'object') {
-          const r = walk(member, chain);
-          isObject ||= r.isObject;
-          declared ||= r.declared;
-          required ||= r.required;
+          collect(member as Record<string, unknown>, chain, acc);
         }
       }
     }
-
-    // Evaluate a nested union LAST, against the complete enclosing state:
-    // every sibling conjunct applies to whichever branch an instance matches,
-    // no matter where the union sits among them.
-    const union = (node['oneOf'] || node['anyOf']) as
-      | Record<string, unknown>[]
-      | undefined;
-    if (Array.isArray(union)) {
-      const enclosing: WalkState = { isObject, declared, required };
-      const branchResults = union.map((branch) => {
-        if (!branch || typeof branch !== 'object') return false;
-        const b = walk(branch, chain);
-        return (
-          (b.isObject || enclosing.isObject) &&
-          (b.declared || enclosing.declared) &&
-          !b.required &&
-          !enclosing.required
-        );
-      });
-      if (branchResults.every(Boolean)) {
-        // Every branch guarantees an optional tenantId under the enclosing
-        // constraints, so the union establishes the flag for this node too.
-        isObject = true;
-        declared = true;
-      } else {
-        // A branch that cannot guarantee an optional tenantId vetoes the
-        // whole union: some instance of this node may lack it (or must
-        // supply it), so the flag cannot be reported for this node.
-        required = true;
-      }
-    }
-
-    return { isObject, declared, required };
+    const union = node['oneOf'] || node['anyOf'];
+    if (Array.isArray(union)) acc.unions.push({ branches: union, chain });
   };
 
-  let isObject = false;
-  let declared = false;
-  let required = false;
-  for (const schema of schemas) {
-    const r = walk(schema, []);
-    isObject ||= r.isObject;
-    declared ||= r.declared;
-    required ||= r.required;
-  }
-  return isObject && declared && !required;
+  /**
+   * Every instance matches one branch of each deferred union, so the flag must
+   * hold for EVERY branch combination under the full enclosing constraints.
+   * Every branch is collected (and its refs validated) before aggregating, so
+   * an unresolved or cyclic branch `$ref` throws regardless of position.
+   */
+  const evaluate = (acc: Acc): boolean => {
+    if (acc.unions.length === 0) return acc.isObject && acc.declared && !acc.required;
+    const [first, ...rest] = acc.unions;
+    const results = first.branches.map((branch) => {
+      if (!branch || typeof branch !== 'object') return false;
+      const next: Acc = { ...acc, unions: [...rest] };
+      collect(branch as Record<string, unknown>, first.chain, next);
+      return evaluate(next);
+    });
+    return results.every(Boolean);
+  };
+
+  const acc: Acc = { isObject: false, declared: false, required: false, unions: [] };
+  collect(schema, [], acc);
+  return evaluate(acc);
 }

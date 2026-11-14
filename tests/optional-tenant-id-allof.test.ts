@@ -318,6 +318,24 @@ describe('optionalTenantIdInBody through allOf (#47)', () => {
     expect(() => optionalTenantIdInBody(schemas, 'Req')).toThrow(/Gone~0Name/);
   });
 
+  // Review on #48: RFC 6901 §6 — URI-decode the fragment BEFORE unescaping
+  // pointer tokens, so `%7E1` means `~1` → `/`, never a literal `~1`.
+  it('URI-decodes before unescaping pointer tokens', () => {
+    const schemas = {
+      'Org/Schema': Base,
+      'Org~1Schema': { type: 'object', properties: { tenantId: { type: 'string' } }, required: ['tenantId'] },
+      Req: { allOf: [{ $ref: '#/components/schemas/Org%7E1Schema' }] },
+      ReqTilde: { allOf: [{ $ref: '#/components/schemas/Org%7E01Schema' }] },
+    };
+    expect(optionalTenantIdInBody(schemas, 'Req')).toBe(true);
+    expect(optionalTenantIdInBody(schemas, 'ReqTilde')).toBe(false);
+  });
+
+  it('rejects a URI-encoded slash as an interior pointer', () => {
+    const schemas = { Base, Req: { allOf: [{ $ref: '#/components/schemas/Org%2FSchema' }] } };
+    expect(() => optionalTenantIdInBody(schemas, 'Req')).toThrow(/Org%2FSchema/);
+  });
+
   // Review on #48: a union nested inside allOf still constrains the body —
   // every instance matches one branch, so a branch that requires tenantId (or
   // never declares it) makes it non-optional overall.
@@ -339,7 +357,7 @@ describe('optionalTenantIdInBody through allOf (#47)', () => {
     expect(optionalTenantIdInBody(schemas, 'Req')).toBe(false);
   });
 
-  it('is false when a union nested in allOf has a branch that never declares tenantId', () => {
+  it('is true when a sibling allOf base declares tenantId optional for every nested-union branch', () => {
     const schemas = {
       Base,
       Req: {
@@ -354,7 +372,7 @@ describe('optionalTenantIdInBody through allOf (#47)', () => {
         ],
       },
     };
-    expect(optionalTenantIdInBody(schemas, 'Req')).toBe(false);
+    expect(optionalTenantIdInBody(schemas, 'Req')).toBe(true);
   });
 
   it('is true when every branch of a union nested in allOf keeps tenantId optional', () => {
