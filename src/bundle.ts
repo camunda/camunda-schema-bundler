@@ -1208,14 +1208,16 @@ export async function bundle(options: BundleOptions): Promise<BundleResult> {
     };
 
     // A parameter target must live in a `parameters` position
-    // (`#/paths/<path>/<method>/parameters/<i>` or
-    // `#/components/parameters/<name>`) — the same context distinction Step 3e
-    // applies to responses. The method segment must be a real HTTP method:
+    // (`#/paths/<path>/<method>/parameters/<i>`, Path-Item-level
+    // `#/paths/<path>/parameters/<i>`, or `#/components/parameters/<name>`).
+    // `<path>` must be an API path (a `/`-prefixed key, JSON-pointer-encoded
+    // as `~1`); any other key under `paths` is an `x-*` extension. This is
+    // the same context distinction Step 3e applies to responses. The method segment must be a real HTTP method:
     // `x-*` extensions are arbitrary data, and a pointer that merely ENDS in
     // `/parameters/<i>` (e.g. into an example payload) is not a parameters
     // position either.
     const PARAMETER_TARGET_REF =
-      /^#\/(?:components\/parameters\/[^/]+|paths\/[^/]+\/(?:get|put|post|delete|options|head|patch|trace)\/parameters\/[^/]+)$/;
+      /^#\/(?:components\/parameters\/[^/]+|paths\/~1[^/]*(?:\/(?:get|put|post|delete|options|head|patch|trace))?\/parameters\/\d+)$/;
     const isParameterTargetRef = (ref: string): boolean =>
       PARAMETER_TARGET_REF.test(ref);
 
@@ -1327,7 +1329,7 @@ export async function bundle(options: BundleOptions): Promise<BundleResult> {
     // `/responses/<status>` (e.g. a nested schema position) is not a
     // response position.
     const RESPONSE_TARGET_REF =
-      /^#\/(?:components\/responses\/[^/]+|paths\/[^/]+\/(?:get|put|post|delete|options|head|patch|trace)\/responses\/(?!x-)[^/]+)$/;
+      /^#\/(?:components\/responses\/[^/]+|paths\/~1[^/]*\/(?:get|put|post|delete|options|head|patch|trace)\/responses\/(?!x-)[^/]+)$/;
     const isResponseTargetRef = (ref: string): boolean =>
       RESPONSE_TARGET_REF.test(ref);
 
@@ -1437,6 +1439,11 @@ export async function bundle(options: BundleOptions): Promise<BundleResult> {
     // does not — copying it there would emit invalid output, the same rule
     // Steps 3d/3e apply). `description` is supported by every object this
     // expander can land on.
+    // Path Item (`#/paths/<path>`) or Operation
+    // (`#/paths/<path>/<method>`) positions — the only targets supporting
+    // `summary`.
+    const SUMMARY_TARGET_REF =
+      /^#\/paths\/~1[^/]*(?:\/(?:get|put|post|delete|options|head|patch|trace))?$/;
     const expand = (
       refNode: Record<string, unknown>
     ): Record<string, unknown> | undefined => {
@@ -1450,11 +1457,9 @@ export async function bundle(options: BundleOptions): Promise<BundleResult> {
         string,
         unknown
       >;
-      const targetSupportsSummary =
-        'parameters' in copy ||
-        'responses' in copy ||
-        'operationId' in copy ||
-        'summary' in copy;
+      // Decided by the pointer's position, not the target's shape: a Path
+      // Item with only method children carries none of the shape markers.
+      const targetSupportsSummary = SUMMARY_TARGET_REF.test(ref);
       const siblings = targetSupportsSummary
         ? (['summary', 'description'] as const)
         : (['description'] as const);
