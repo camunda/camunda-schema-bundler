@@ -474,12 +474,12 @@ function extractOperations(
               }
               // optionalTenantIdInBody: true only if ALL variants have optional tenantId
               const resolved = variants.map((v) => resolveSchemaRef(v, componentSchemas));
-              if (resolved.length > 0 && resolved.every((rs) => rs && hasOptionalTenantId(rs))) {
+              if (resolved.length > 0 && resolved.every((rs) => rs && hasOptionalTenantId(rs, componentSchemas))) {
                 optionalTenantIdInBody = true;
               }
             } else {
               const resolved = resolveSchemaRef(schema, componentSchemas);
-              if (resolved && hasOptionalTenantId(resolved)) {
+              if (resolved && hasOptionalTenantId(resolved, componentSchemas)) {
                 optionalTenantIdInBody = true;
               }
             }
@@ -607,11 +607,63 @@ function resolveComponentRef(
   return componentBucket[name] as Record<string, unknown> | undefined;
 }
 
-/** Check if a resolved schema has an optional tenantId property. */
-function hasOptionalTenantId(schema: Record<string, unknown>): boolean {
-  if (schema['type'] !== 'object') return false;
-  const props = schema['properties'] as Record<string, unknown> | undefined;
-  if (!props || !props['tenantId']) return false;
-  const required = (schema['required'] as string[] | undefined) ?? [];
-  return !required.includes('tenantId');
+/**
+ * Check if a resolved schema has an optional tenantId property.
+ *
+ * Walks the schema together with its `allOf` members (by `$ref` or inline,
+ * recursively), because that is where composed request bodies inherit
+ * `tenantId` from a shared base (#47). `tenantId` is optional when some level
+ * declares it under `properties` and no level lists it in `required`. At least
+ * one level must be `type: object`, as before.
+ *
+ * Throws on an `allOf` `$ref` that does not resolve, or a cyclic `allOf`
+ * chain: either means the flag cannot be computed, and guessing would
+ * silently change SDK behaviour.
+ */
+function hasOptionalTenantId(
+  schema: Record<string, unknown>,
+  componentSchemas: Record<string, unknown>
+): boolean {
+  let isObject = false;
+  let declared = false;
+  let required = false;
+
+  const visit = (node: Record<string, unknown>, chain: string[]): void => {
+    if (node['type'] === 'object') isObject = true;
+    const props = node['properties'] as Record<string, unknown> | undefined;
+    if (props && props['tenantId']) declared = true;
+    const req = node['required'];
+    if (Array.isArray(req) && req.includes('tenantId')) required = true;
+
+    const allOf = node['allOf'];
+    if (!Array.isArray(allOf)) return;
+    for (const member of allOf as Record<string, unknown>[]) {
+      if (!member || typeof member !== 'object') continue;
+      const ref = member['$ref'];
+      if (typeof ref !== 'string') {
+        visit(member, chain);
+        continue;
+      }
+      if (chain.includes(ref)) {
+        throw new Error(
+          `Cyclic allOf chain while computing optionalTenantIdInBody: ` +
+            `${[...chain, ref].join(' -> ')}`
+        );
+      }
+      const prefix = '#/components/schemas/';
+      const target = ref.startsWith(prefix)
+        ? componentSchemas[ref.slice(prefix.length)]
+        : undefined;
+      if (!target || typeof target !== 'object') {
+        throw new Error(
+          `allOf $ref ${ref} does not resolve to a component schema while ` +
+            `computing optionalTenantIdInBody (chain: ${[...chain, ref].join(' -> ')})`
+        );
+      }
+      visit(target as Record<string, unknown>, [...chain, ref]);
+    }
+  };
+
+  visit(schema, []);
+  return isObject && declared && !required;
 }

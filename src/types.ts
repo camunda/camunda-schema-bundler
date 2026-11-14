@@ -314,7 +314,11 @@ export interface OperationSummary {
   /** For union request bodies: the $ref target schema names. */
   requestBodyUnionRefs: string[];
 
-  /** Whether the (resolved) request body has an optional tenantId property. */
+  /**
+   * Whether the (resolved) request body has an optional tenantId property,
+   * declared directly or inherited through `allOf`. For union bodies, every
+   * variant must have it.
+   */
   optionalTenantIdInBody: boolean;
 
   /**
