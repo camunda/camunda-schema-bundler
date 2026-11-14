@@ -158,23 +158,45 @@ export function resolveInternalRef(
  * `undefined` (the caller leaves the ref in place for the survivor guard)
  * instead of recursing forever. A hop that cannot be resolved also
  * terminates as `undefined`.
+ *
+ * Two optional refinements, both motivated by the fact that the intermediate
+ * references are real OpenAPI nodes, not transparent aliases:
+ *
+ * - `requirePosition`: when given, EVERY hop's pointer must satisfy it —
+ *   the initial node's own position was already checked by the caller, but a
+ *   hop may lead anywhere: into an `x-*` extension, or into a nested schema
+ *   position that merely ends in a `responses`/`parameters`-shaped suffix.
+ *   A hop that fails the check resolves the whole walk to `undefined`, so
+ *   the caller leaves the original ref in place for the survivor guard.
+ *
+ * - Intermediate `description` siblings: each reference in the chain may
+ *   carry a `description` overriding its target's. The nearest reference to
+ *   the use site wins, so the FIRST sibling encountered along the walk is
+ *   returned as `description` for the caller to apply when the use-site
+ *   reference carries none of its own.
  */
 export function resolveTerminalRef(
   snapshot: Record<string, unknown>,
   fallback: Record<string, unknown>,
-  node: unknown
-): unknown {
+  node: unknown,
+  requirePosition?: (ref: string) => boolean
+): { node: unknown; description?: string } {
   const hops = new Set<string>();
   let cur = node;
+  let description: string | undefined;
   while (cur && typeof cur === 'object' && !Array.isArray(cur)) {
-    const ref = (cur as Record<string, unknown>)['$ref'];
+    const obj = cur as Record<string, unknown>;
+    const ref = obj['$ref'];
     if (typeof ref !== 'string' || !ref.startsWith('#/')) break;
-    if (hops.has(ref)) return undefined; // reference cycle
+    if (hops.has(ref)) return { node: undefined }; // reference cycle
     hops.add(ref);
+    if (requirePosition && !requirePosition(ref)) return { node: undefined };
+    if (description === undefined && typeof obj['description'] === 'string')
+      description = obj['description'] as string;
     cur =
       resolveInternalRef(snapshot, ref) ?? resolveInternalRef(fallback, ref);
   }
-  return cur;
+  return description === undefined ? { node: cur } : { node: cur, description };
 }
 
 const COMPONENT_SCHEMA_REF = /^#\/components\/schemas\/([^/]+)$/;

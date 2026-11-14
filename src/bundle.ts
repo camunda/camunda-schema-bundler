@@ -1210,8 +1210,12 @@ export async function bundle(options: BundleOptions): Promise<BundleResult> {
     // A parameter target must live in a `parameters` position
     // (`#/paths/<path>/<method>/parameters/<i>` or
     // `#/components/parameters/<name>`) — the same context distinction Step 3e
-    // applies to responses.
-    const PARAMETER_TARGET_REF = /^#\/(?:components\/parameters\/[^/]+|paths\/.+\/parameters\/[^/]+)$/;
+    // applies to responses. The method segment must be a real HTTP method:
+    // `x-*` extensions are arbitrary data, and a pointer that merely ENDS in
+    // `/parameters/<i>` (e.g. into an example payload) is not a parameters
+    // position either.
+    const PARAMETER_TARGET_REF =
+      /^#\/(?:components\/parameters\/[^/]+|paths\/[^/]+\/(?:get|put|post|delete|options|head|patch|trace)\/parameters\/[^/]+)$/;
     const isParameterTargetRef = (ref: string): boolean =>
       PARAMETER_TARGET_REF.test(ref);
 
@@ -1227,28 +1231,41 @@ export async function bundle(options: BundleOptions): Promise<BundleResult> {
           // removed during normalization. Follow terminal hops: the snapshots
           // predate inlining, so an acyclic chain's target is still the
           // intermediate reference. Cycle-safe: a cycle resolves to undefined.
-          const resolved = resolveTerminalRef(
-            postNormSnapshot as Record<string, unknown>,
-            preNormSnapshot as Record<string, unknown>,
-            resolveInternalRef(postNormSnapshot as Record<string, unknown>, ref) ??
-              resolveInternalRef(preNormSnapshot as Record<string, unknown>, ref)
-          );
+          // The walk only starts from — and only continues through — pointers
+          // that are themselves parameters positions: a chain may otherwise
+          // lead into an `x-*` extension or transit a non-parameter position
+          // to launder a non-parameter target.
+          const hopWalk = isParameterTargetRef(ref)
+            ? resolveTerminalRef(
+                postNormSnapshot as Record<string, unknown>,
+                preNormSnapshot as Record<string, unknown>,
+                resolveInternalRef(postNormSnapshot as Record<string, unknown>, ref) ??
+                  resolveInternalRef(preNormSnapshot as Record<string, unknown>, ref),
+                isParameterTargetRef
+              )
+            : { node: undefined };
+          const resolved = hopWalk.node;
+          const intermediateDescription = hopWalk.description;
           // Only substitute something that is actually a parameter. Anything
           // else — a primitive, a response object, or a reference cycle —
           // leaves the $ref in place so the Step 5 guard reports it,
           // uncounted.
-          if (isParameterTargetRef(ref) && isParameterObject(resolved)) {
+          if (isParameterObject(resolved)) {
             const copy = JSON.parse(JSON.stringify(resolved)) as Record<
               string,
               unknown
             >;
-            // A Reference Object may carry `summary`/`description` siblings
-            // overriding the target's (OpenAPI 3.1; 3.0.x processors apply
-            // the same rule). Inlining must not discard those overrides.
-            for (const sibling of ['summary', 'description'] as const) {
-              const override = (param as Record<string, unknown>)[sibling];
-              if (typeof override === 'string') copy[sibling] = override;
-            }
+            // A Reference Object may carry a `description` sibling overriding
+            // the target's (OpenAPI 3.1; 3.0.x processors apply the same
+            // rule). Inlining must not discard that override: the use-site
+            // reference's own sibling wins, then the nearest intermediate
+            // reference's, then the terminal parameter's. `summary` is NOT
+            // copied — a Parameter Object has no such field, so emitting it
+            // would turn a valid reference into invalid output.
+            const override =
+              (param as Record<string, unknown>)['description'] ??
+              intermediateDescription;
+            if (typeof override === 'string') copy['description'] = override;
             params[i] = copy;
             inlined++;
           }
@@ -1304,8 +1321,13 @@ export async function bundle(options: BundleOptions): Promise<BundleResult> {
     // annotation-only Schema Object (`{ description: '…' }` is valid as
     // both). The target's OpenAPI context can: a response target must live
     // under a `responses` map (`#/paths/<path>/<method>/responses/<status>`
-    // or `#/components/responses/<name>`).
-    const RESPONSE_TARGET_REF = /^#\/(?:components\/responses\/[^/]+|paths\/.+\/responses\/[^/]+)$/;
+    // or `#/components/responses/<name>`). The method segment must be a real
+    // HTTP method and the key a real status code — `x-*` extensions are
+    // arbitrary data — and a pointer that merely ENDS in
+    // `/responses/<status>` (e.g. a nested schema position) is not a
+    // response position.
+    const RESPONSE_TARGET_REF =
+      /^#\/(?:components\/responses\/[^/]+|paths\/[^/]+\/(?:get|put|post|delete|options|head|patch|trace)\/responses\/(?!x-)[^/]+)$/;
     const isResponseTargetRef = (ref: string): boolean =>
       RESPONSE_TARGET_REF.test(ref);
 
@@ -1319,29 +1341,41 @@ export async function bundle(options: BundleOptions): Promise<BundleResult> {
           // Follow terminal hops: the snapshots predate inlining, so the
           // target of an acyclic chain (`/c` → `/b` → `/a`) is still `/b`'s
           // reference. Cycle-safe: a cycle resolves to undefined and is left
-          // for the survivor guard.
-          const resolved = resolveTerminalRef(
-            postNormSnapshot as Record<string, unknown>,
-            preNormSnapshot as Record<string, unknown>,
-            resolveInternalRef(postNormSnapshot as Record<string, unknown>, ref) ??
-              resolveInternalRef(preNormSnapshot as Record<string, unknown>, ref)
-          );
+          // for the survivor guard. The walk only starts from — and only
+          // continues through — pointers that are themselves response
+          // positions: a chain may otherwise lead into an `x-*` extension or
+          // transit a schema position to launder a non-response target.
+          const hopWalk = isResponseTargetRef(ref)
+            ? resolveTerminalRef(
+                postNormSnapshot as Record<string, unknown>,
+                preNormSnapshot as Record<string, unknown>,
+                resolveInternalRef(postNormSnapshot as Record<string, unknown>, ref) ??
+                  resolveInternalRef(preNormSnapshot as Record<string, unknown>, ref),
+                isResponseTargetRef
+              )
+            : { node: undefined };
+          const resolved = hopWalk.node;
+          const intermediateDescription = hopWalk.description;
           // Anything that is not a Response Object — a primitive, another
           // object type, a missing target, or a reference cycle — leaves the
           // $ref in place, uncounted, so the Step 5 guard reports it. The
           // context check rejects a structurally identical Schema Object.
-          if (isResponseTargetRef(ref) && isResponseObject(resolved)) {
+          if (isResponseObject(resolved)) {
             const copy = JSON.parse(JSON.stringify(resolved)) as Record<
               string,
               unknown
             >;
-            // A Reference Object may carry `summary`/`description` siblings
-            // overriding the target's (OpenAPI 3.1; 3.0.x processors apply
-            // the same rule). Inlining must not discard those overrides.
-            for (const sibling of ['summary', 'description'] as const) {
-              const override = (response as Record<string, unknown>)[sibling];
-              if (typeof override === 'string') copy[sibling] = override;
-            }
+            // A Reference Object may carry a `description` sibling overriding
+            // the target's (OpenAPI 3.1; 3.0.x processors apply the same
+            // rule). Inlining must not discard that override: the use-site
+            // reference's own sibling wins, then the nearest intermediate
+            // reference's, then the terminal response's. `summary` is NOT
+            // copied — a Response Object has no such field, so emitting it
+            // would turn a valid reference into invalid output.
+            const override =
+              (response as Record<string, unknown>)['description'] ??
+              intermediateDescription;
+            if (typeof override === 'string') copy['description'] = override;
             responses[status] = copy;
             inlined++;
           }
@@ -1397,6 +1431,12 @@ export async function bundle(options: BundleOptions): Promise<BundleResult> {
     // snapshots predate the inlining passes, so an aliased Path Item still
     // contains the reference with its siblings, and a naive expansion would
     // lose them.
+    //
+    // `summary` is only copied when the resolved target supports the field
+    // (a Path Item or Operation Object does; a Response or Parameter Object
+    // does not — copying it there would emit invalid output, the same rule
+    // Steps 3d/3e apply). `description` is supported by every object this
+    // expander can land on.
     const expand = (
       refNode: Record<string, unknown>
     ): Record<string, unknown> | undefined => {
@@ -1410,7 +1450,15 @@ export async function bundle(options: BundleOptions): Promise<BundleResult> {
         string,
         unknown
       >;
-      for (const sibling of ['summary', 'description'] as const) {
+      const targetSupportsSummary =
+        'parameters' in copy ||
+        'responses' in copy ||
+        'operationId' in copy ||
+        'summary' in copy;
+      const siblings = targetSupportsSummary
+        ? (['summary', 'description'] as const)
+        : (['description'] as const);
+      for (const sibling of siblings) {
         const override = refNode[sibling];
         if (typeof override === 'string') copy[sibling] = override;
       }

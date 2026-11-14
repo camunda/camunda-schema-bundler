@@ -580,7 +580,10 @@ paths:
     });
     const c200 = entries.find((e) => e.where === 'GET /c 200');
     expect(c200?.response['$ref']).toBeUndefined();
-    expect(c200?.response['description']).toBe('Terminal response.');
+    // `/b`'s reference carries a `B override.` description sibling. Terminal
+    // hopping must preserve the nearest intermediate reference's override —
+    // `/c` has no sibling of its own, so `/b`'s wins over the terminal's.
+    expect(c200?.response['description']).toBe('B override.');
     expect(c200?.response['content']).toEqual({
       'text/plain': { schema: { type: 'string' } },
     });
@@ -675,5 +678,289 @@ paths:
     expect(c200['content']).toEqual({
       'text/plain': { schema: { type: 'string' } },
     });
+  });
+});
+
+/**
+ * A Response Object has no `summary` field (OpenAPI 3.0/3.1 fixed fields:
+ * `description`, `headers`, `content`, `links`). A Reference Object may carry
+ * a `summary` sibling, but inlining the reference into a `responses` map must
+ * not copy it across — that would turn a valid reference into an invalid
+ * Response Object.
+ */
+describe('summary sibling on a path-local response $ref', () => {
+  let specDir: string;
+
+  beforeAll(() => {
+    specDir = fs.mkdtempSync(path.join(os.tmpdir(), 'bundler-response-summary-'));
+    writeSpec(specDir, {
+      'rest-api.yaml': `openapi: '3.0.3'
+info:
+  title: Test API
+  version: '1.0.0'
+paths:
+  /a:
+    get:
+      operationId: opA
+      responses:
+        '200':
+          description: Shared description.
+  /b:
+    get:
+      operationId: opB
+      responses:
+        '200':
+          $ref: '#/paths/~1a/get/responses/200'
+          summary: Reference-level summary.
+          description: Operation-specific description.
+`,
+    });
+  });
+
+  it('drops the unsupported summary, keeps the description override', async () => {
+    const result = await bundle({ specDir });
+    const entries = collectResponseEntries(
+      result.spec as Record<string, unknown>
+    );
+    const b200 = entries.find((e) => e.where === 'GET /b 200');
+    expect(b200?.response['$ref']).toBeUndefined();
+    expect(b200?.response['description']).toBe('Operation-specific description.');
+    expect(b200?.response['summary']).toBeUndefined();
+  });
+});
+
+/**
+ * A terminal hop may itself carry a `description` sibling. The nearest
+ * reference to the use site wins: `/c`'s own sibling first, then the
+ * intermediate `/b` reference's, then the terminal object's.
+ */
+describe('intermediate reference description in a response chain', () => {
+  let specDir: string;
+
+  beforeAll(() => {
+    specDir = fs.mkdtempSync(path.join(os.tmpdir(), 'bundler-response-chain-hop-'));
+    writeSpec(specDir, {
+      'rest-api.yaml': `openapi: '3.0.3'
+info:
+  title: Test API
+  version: '1.0.0'
+paths:
+  /a:
+    get:
+      operationId: opA
+      responses:
+        '200':
+          description: Terminal response.
+  /b:
+    get:
+      operationId: opB
+      responses:
+        '200':
+          $ref: '#/paths/~1a/get/responses/200'
+          description: B override.
+  /c:
+    get:
+      operationId: opC
+      responses:
+        '200':
+          $ref: '#/paths/~1b/get/responses/200'
+          description: C override.
+`,
+    });
+  });
+
+  it("the use site's own sibling beats the intermediate reference's", async () => {
+    const result = await bundle({ specDir });
+    const entries = collectResponseEntries(
+      result.spec as Record<string, unknown>
+    );
+    const c200 = entries.find((e) => e.where === 'GET /c 200');
+    expect(c200?.response['$ref']).toBeUndefined();
+    expect(c200?.response['description']).toBe('C override.');
+    const b200 = entries.find((e) => e.where === 'GET /b 200');
+    expect(b200?.response['description']).toBe('B override.');
+  });
+});
+
+/**
+ * The context check must hold for the whole resolution, not just the initial
+ * pointer: a response `$ref` may only ever resolve to a real responses-map
+ * position (`#/paths/<path>/<method>/responses/<status>` — a real HTTP method,
+ * never an `x-*` extension — or `#/components/responses/<name>`).
+ *
+ * Each case below is rejected by the survivor guard, uncounted:
+ *  - a nested schema position that merely ENDS in `/responses/<status>`;
+ *  - a chain whose terminal hop points into an `x-*` extension;
+ *  - a chain whose intermediate hop is an `x-*` extension entry.
+ */
+describe('response $ref context validated at every resolution hop', () => {
+  it('rejects a nested schema position ending in /responses/<status>', async () => {
+    const specDir = fs.mkdtempSync(path.join(os.tmpdir(), 'bundler-response-nested-'));
+    writeSpec(specDir, {
+      'rest-api.yaml': `openapi: '3.0.3'
+info:
+  title: Test API
+  version: '1.0.0'
+paths:
+  /a:
+    get:
+      operationId: opA
+      parameters:
+        - name: alpha
+          in: query
+          schema:
+            description: An alpha value.
+            properties:
+              responses:
+                '200':
+                  description: Not a response position.
+      responses:
+        '200':
+          description: OK
+  /b:
+    get:
+      operationId: opB
+      responses:
+        '200':
+          $ref: '#/paths/~1a/get/parameters/0/schema/properties/responses/200'
+`,
+    });
+    await expect(bundle({ specDir })).rejects.toThrow(
+      /survived in responses maps[\s\S]*GET \/b 200/
+    );
+  });
+
+  it('rejects a chain whose terminal hop lives in an x-* extension', async () => {
+    const specDir = fs.mkdtempSync(path.join(os.tmpdir(), 'bundler-response-xterm-'));
+    writeSpec(specDir, {
+      'rest-api.yaml': `openapi: '3.0.3'
+info:
+  title: Test API
+  version: '1.0.0'
+paths:
+  /a:
+    get:
+      operationId: opA
+      x-ext:
+        responses:
+          '200':
+            description: Extension payload, not a response.
+      responses:
+        '200':
+          description: OK
+  /b:
+    get:
+      operationId: opB
+      responses:
+        '200':
+          $ref: '#/paths/~1a/get/x-ext/responses/200'
+  /c:
+    get:
+      operationId: opC
+      responses:
+        '200':
+          $ref: '#/paths/~1b/get/responses/200'
+`,
+    });
+    // SwaggerParser keeps the chain (/b's ref is left in place because its
+    // target is extension data, and /c is rewritten onto /b). Following the
+    // terminal hop must validate the hop's position too: `x-ext` is not an
+    // HTTP method, so neither /b nor /c may inline.
+    await expect(bundle({ specDir })).rejects.toThrow(
+      /survived in responses maps[\s\S]*GET \/c 200/
+    );
+  });
+
+  it('rejects a chain whose intermediate hop is an x-* extension entry', async () => {
+    const specDir = fs.mkdtempSync(path.join(os.tmpdir(), 'bundler-response-xhop-'));
+    writeSpec(specDir, {
+      'rest-api.yaml': `openapi: '3.0.3'
+info:
+  title: Test API
+  version: '1.0.0'
+paths:
+  /a:
+    get:
+      operationId: opA
+      responses:
+        '200':
+          description: Terminal response.
+  /b:
+    get:
+      operationId: opB
+      responses:
+        '200':
+          description: OK
+        x-foo:
+          $ref: '#/paths/~1a/get/responses/200'
+          # The sibling keeps the extension entry a distinct reference
+          # through SwaggerParser bundling; without it /c is normalized to
+          # point at /a directly and there is no hop left to validate.
+          description: Extension entry override.
+  /c:
+    get:
+      operationId: opC
+      responses:
+        '200':
+          $ref: '#/paths/~1b/get/responses/x-foo'
+`,
+    });
+    // `/c` points at an extension ENTRY of /b's responses map, which itself
+    // references the real response at /a. The initial pointer passes the
+    // shape check but is not a response position, and following the hop to
+    // /a must not rescue it: extension data is never inlined.
+    await expect(bundle({ specDir })).rejects.toThrow(
+      /survived in responses maps[\s\S]*GET \/c 200/
+    );
+  });
+
+  it('rejects a chain that transits a non-response position', async () => {
+    // SwaggerParser collapses any chain whose hops are bare references, so
+    // the transit case cannot be built from source YAML: the walk is unit-
+    // tested against the snapshots directly. `/c` → `/b` is a valid response
+    // position, but `/b`'s snapshot node references a SCHEMA position — the
+    // walk must stop there instead of laundering the terminal Response
+    // Object through a non-response hop.
+    const { resolveInternalRef, resolveTerminalRef } = await import(
+      '../src/helpers.js'
+    );
+    const snapshot = {
+      paths: {
+        '/a': {
+          get: { responses: { '200': { description: 'Terminal response.' } } },
+        },
+        '/b': {
+          get: {
+            responses: {
+              '200': { $ref: '#/paths/~1s/get/parameters/0/schema' },
+            },
+          },
+        },
+        '/s': {
+          get: {
+            parameters: [
+              {
+                name: 'carrier',
+                in: 'query',
+                schema: { $ref: '#/paths/~1a/get/responses/200' },
+              },
+            ],
+          },
+        },
+      },
+    } as Record<string, unknown>;
+    const RESPONSE_TARGET_REF =
+      /^#\/(?:components\/responses\/[^/]+|paths\/[^/]+\/(?:get|put|post|delete|options|head|patch|trace)\/responses\/(?!x-)[^/]+)$/;
+    const isResponseTargetRef = (ref: string): boolean =>
+      RESPONSE_TARGET_REF.test(ref);
+    const ref = '#/paths/~1b/get/responses/200';
+    expect(isResponseTargetRef(ref)).toBe(true);
+    const walk = resolveTerminalRef(
+      snapshot,
+      snapshot,
+      resolveInternalRef(snapshot, ref),
+      isResponseTargetRef
+    );
+    expect(walk.node).toBeUndefined();
   });
 });
