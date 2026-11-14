@@ -17,6 +17,7 @@ import {
   rewriteInternalRefs,
   rewriteExternalRefsToLocal,
   resolveInternalRef,
+  resolveTerminalRef,
   canonicalStringify,
   structuralStringify,
   findPathLocalLikeRefs,
@@ -1206,6 +1207,14 @@ export async function bundle(options: BundleOptions): Promise<BundleResult> {
       return typeof p['name'] === 'string' && typeof p['in'] === 'string';
     };
 
+    // A parameter target must live in a `parameters` position
+    // (`#/paths/<path>/<method>/parameters/<i>` or
+    // `#/components/parameters/<name>`) — the same context distinction Step 3e
+    // applies to responses.
+    const PARAMETER_TARGET_REF = /^#\/(?:components\/parameters\/[^/]+|paths\/.+\/parameters\/[^/]+)$/;
+    const isParameterTargetRef = (ref: string): boolean =>
+      PARAMETER_TARGET_REF.test(ref);
+
     for (let pass = 1; pass <= 20; pass++) {
       let inlined = 0;
       forEachParameterArray(bundled, (params) => {
@@ -1215,27 +1224,30 @@ export async function bundle(options: BundleOptions): Promise<BundleResult> {
           const ref = (param as Record<string, unknown>)['$ref'] as string;
           // Prefer the post-normalization source (normalized $like refs,
           // promoted schemas); fall back to pre-normalization if the path was
-          // removed during normalization.
-          const resolved =
+          // removed during normalization. Follow terminal hops: the snapshots
+          // predate inlining, so an acyclic chain's target is still the
+          // intermediate reference. Cycle-safe: a cycle resolves to undefined.
+          const resolved = resolveTerminalRef(
+            postNormSnapshot as Record<string, unknown>,
+            preNormSnapshot as Record<string, unknown>,
             resolveInternalRef(postNormSnapshot as Record<string, unknown>, ref) ??
-            resolveInternalRef(preNormSnapshot as Record<string, unknown>, ref);
+              resolveInternalRef(preNormSnapshot as Record<string, unknown>, ref)
+          );
           // Only substitute something that is actually a parameter. Anything
-          // else — a primitive, a response object, or another path-local ref
-          // (a cycle, which could never make progress anyway) — leaves the
-          // $ref in place so the Step 5 guard reports it, uncounted.
-          if (isParameterObject(resolved)) {
+          // else — a primitive, a response object, or a reference cycle —
+          // leaves the $ref in place so the Step 5 guard reports it,
+          // uncounted.
+          if (isParameterTargetRef(ref) && isParameterObject(resolved)) {
             const copy = JSON.parse(JSON.stringify(resolved)) as Record<
               string,
               unknown
             >;
-            // A Reference Object may carry a `description` (and `summary`)
-            // sibling overriding the target's (OpenAPI 3.1; 3.0.x processors
-            // apply the same rule). Inlining must not discard that override.
-            const siblingDescription = (param as Record<string, unknown>)[
-              'description'
-            ];
-            if (typeof siblingDescription === 'string') {
-              copy['description'] = siblingDescription;
+            // A Reference Object may carry `summary`/`description` siblings
+            // overriding the target's (OpenAPI 3.1; 3.0.x processors apply
+            // the same rule). Inlining must not discard those overrides.
+            for (const sibling of ['summary', 'description'] as const) {
+              const override = (param as Record<string, unknown>)[sibling];
+              if (typeof override === 'string') copy[sibling] = override;
             }
             params[i] = copy;
             inlined++;
@@ -1288,6 +1300,15 @@ export async function bundle(options: BundleOptions): Promise<BundleResult> {
       );
     };
 
+    // Shape alone cannot distinguish a Response Object from an
+    // annotation-only Schema Object (`{ description: '…' }` is valid as
+    // both). The target's OpenAPI context can: a response target must live
+    // under a `responses` map (`#/paths/<path>/<method>/responses/<status>`
+    // or `#/components/responses/<name>`).
+    const RESPONSE_TARGET_REF = /^#\/(?:components\/responses\/[^/]+|paths\/.+\/responses\/[^/]+)$/;
+    const isResponseTargetRef = (ref: string): boolean =>
+      RESPONSE_TARGET_REF.test(ref);
+
     for (let pass = 1; pass <= 20; pass++) {
       let inlined = 0;
       forEachResponsesMap(bundled, (responses) => {
@@ -1295,26 +1316,31 @@ export async function bundle(options: BundleOptions): Promise<BundleResult> {
           if (status.startsWith('x-')) continue; // extension, not a response
           if (!isPathLocalRef(response)) continue;
           const ref = (response as Record<string, unknown>)['$ref'] as string;
-          const resolved =
+          // Follow terminal hops: the snapshots predate inlining, so the
+          // target of an acyclic chain (`/c` → `/b` → `/a`) is still `/b`'s
+          // reference. Cycle-safe: a cycle resolves to undefined and is left
+          // for the survivor guard.
+          const resolved = resolveTerminalRef(
+            postNormSnapshot as Record<string, unknown>,
+            preNormSnapshot as Record<string, unknown>,
             resolveInternalRef(postNormSnapshot as Record<string, unknown>, ref) ??
-            resolveInternalRef(preNormSnapshot as Record<string, unknown>, ref);
+              resolveInternalRef(preNormSnapshot as Record<string, unknown>, ref)
+          );
           // Anything that is not a Response Object — a primitive, another
-          // object type, a missing target, or another path-local ref (a
-          // cycle) — leaves the $ref in place, uncounted, so the Step 5 guard
-          // reports it.
-          if (isResponseObject(resolved)) {
+          // object type, a missing target, or a reference cycle — leaves the
+          // $ref in place, uncounted, so the Step 5 guard reports it. The
+          // context check rejects a structurally identical Schema Object.
+          if (isResponseTargetRef(ref) && isResponseObject(resolved)) {
             const copy = JSON.parse(JSON.stringify(resolved)) as Record<
               string,
               unknown
             >;
-            // A Reference Object may carry a `description` (and `summary`)
-            // sibling overriding the target's (OpenAPI 3.1; 3.0.x processors
-            // apply the same rule). Inlining must not discard that override.
-            const siblingDescription = (
-              response as Record<string, unknown>
-            )['description'];
-            if (typeof siblingDescription === 'string') {
-              copy['description'] = siblingDescription;
+            // A Reference Object may carry `summary`/`description` siblings
+            // overriding the target's (OpenAPI 3.1; 3.0.x processors apply
+            // the same rule). Inlining must not discard those overrides.
+            for (const sibling of ['summary', 'description'] as const) {
+              const override = (response as Record<string, unknown>)[sibling];
+              if (typeof override === 'string') copy[sibling] = override;
             }
             responses[status] = copy;
             inlined++;
@@ -1365,6 +1391,32 @@ export async function bundle(options: BundleOptions): Promise<BundleResult> {
   // ── Step 4: Optionally dereference remaining path-local $refs ─────────────
 
   if (options.dereferencePathLocalRefs) {
+    // A Reference Object may carry `summary`/`description` siblings
+    // overriding the target's (OpenAPI 3.1; 3.0.x processors apply the same
+    // rule). Expanding the ref must not discard those overrides — the
+    // snapshots predate the inlining passes, so an aliased Path Item still
+    // contains the reference with its siblings, and a naive expansion would
+    // lose them.
+    const expand = (
+      refNode: Record<string, unknown>
+    ): Record<string, unknown> | undefined => {
+      const ref = refNode['$ref'] as string;
+      const resolved =
+        resolveInternalRef(postNormSnapshot as Record<string, unknown>, ref) ??
+        resolveInternalRef(preNormSnapshot as Record<string, unknown>, ref);
+      if (!resolved || typeof resolved !== 'object' || Array.isArray(resolved))
+        return undefined;
+      const copy = JSON.parse(JSON.stringify(resolved)) as Record<
+        string,
+        unknown
+      >;
+      for (const sibling of ['summary', 'description'] as const) {
+        const override = refNode[sibling];
+        if (typeof override === 'string') copy[sibling] = override;
+      }
+      return copy;
+    };
+
     for (let pass = 1; pass <= 20; pass++) {
       let dereferenced = 0;
       const seen = new Set<unknown>();
@@ -1386,17 +1438,9 @@ export async function bundle(options: BundleOptions): Promise<BundleResult> {
             ) {
               // Prefer post-normalization source (normalized $like, promoted schemas);
               // fall back to pre-normalization if the path was removed during normalization
-              const resolved =
-                resolveInternalRef(
-                  postNormSnapshot as Record<string, unknown>,
-                  item['$ref'] as string
-                ) ??
-                resolveInternalRef(
-                  preNormSnapshot as Record<string, unknown>,
-                  item['$ref'] as string
-                );
-              if (resolved) {
-                node[i] = JSON.parse(JSON.stringify(resolved));
+              const expanded = expand(item);
+              if (expanded) {
+                node[i] = expanded;
                 dereferenced++;
               }
             }
@@ -1411,17 +1455,9 @@ export async function bundle(options: BundleOptions): Promise<BundleResult> {
               typeof valObj['$ref'] === 'string' &&
               (valObj['$ref'] as string).startsWith('#/paths/')
             ) {
-              const resolved =
-                resolveInternalRef(
-                  postNormSnapshot as Record<string, unknown>,
-                  valObj['$ref'] as string
-                ) ??
-                resolveInternalRef(
-                  preNormSnapshot as Record<string, unknown>,
-                  valObj['$ref'] as string
-                );
-              if (resolved) {
-                obj[key] = JSON.parse(JSON.stringify(resolved));
+              const expanded = expand(valObj);
+              if (expanded) {
+                obj[key] = expanded;
                 dereferenced++;
               }
             }

@@ -461,3 +461,219 @@ paths:
     expect(result.stats.inlinedPathLocalResponseCount).toBe(0);
   });
 });
+
+/**
+ * An annotation-only schema (one carrying a `description` and nothing else)
+ * passes a pure shape check for a Response Object. The target's OpenAPI
+ * context — it must live under a `responses` map — is what distinguishes a
+ * structurally identical schema from a response.
+ */
+describe('path-local response $ref resolving to an annotation-only schema', () => {
+  let specDir: string;
+  const ref = '#/paths/~1a/get/parameters/0/schema';
+
+  beforeAll(() => {
+    specDir = fs.mkdtempSync(path.join(os.tmpdir(), 'bundler-response-annoschema-'));
+    writeSpec(specDir, {
+      'rest-api.yaml': `openapi: '3.0.3'
+info:
+  title: Test API
+  version: '1.0.0'
+paths:
+  /a:
+    get:
+      operationId: opA
+      parameters:
+        - name: alpha
+          in: query
+          required: false
+          schema:
+            description: An alpha value.
+      responses:
+        '200':
+          description: OK
+  /b:
+    get:
+      operationId: opB
+      responses:
+        '200':
+          $ref: '${ref}'
+`,
+    });
+  });
+
+  it('throws, naming the offending ref', async () => {
+    await expect(bundle({ specDir })).rejects.toThrow(
+      /survived in responses maps[\s\S]*GET \/b 200/
+    );
+  });
+
+  it('leaves the $ref in place, uncounted, when bypassed', async () => {
+    const result = await bundle({ specDir, allowPathLocalResponseRefs: true });
+    const entries = collectResponseEntries(
+      result.spec as Record<string, unknown>
+    );
+    const b200 = entries.find(({ where }) => where === 'GET /b 200');
+    expect(b200?.response['$ref']).toBe(ref);
+    expect(result.stats.inlinedPathLocalResponseCount).toBe(0);
+  });
+});
+
+/**
+ * An acyclic chain of response references — `/c` → `/b` → `/a`, with a real
+ * Response Object at `/a` — must resolve: after `/b` is inlined, `/c` still
+ * points at `/b`'s original reference in the immutable snapshots, so the
+ * resolver must follow terminal `$ref` hops (with cycle detection) to reach
+ * the Response Object.
+ */
+describe('acyclic chain of path-local response $refs', () => {
+  let specDir: string;
+
+  beforeAll(() => {
+    specDir = fs.mkdtempSync(path.join(os.tmpdir(), 'bundler-response-chain-'));
+    writeSpec(specDir, {
+      'rest-api.yaml': `openapi: '3.0.3'
+info:
+  title: Test API
+  version: '1.0.0'
+paths:
+  /a:
+    get:
+      operationId: opA
+      responses:
+        '200':
+          description: Terminal response.
+          content:
+            text/plain:
+              schema:
+                type: string
+  /b:
+    get:
+      operationId: opB
+      responses:
+        '200':
+          $ref: '#/paths/~1a/get/responses/200'
+          # The sibling keeps /b's entry a distinct reference through
+          # SwaggerParser bundling; without it /c is normalized to point at
+          # /a directly and there is no chain left to resolve.
+          description: B override.
+  /c:
+    get:
+      operationId: opC
+      responses:
+        '200':
+          $ref: '#/paths/~1b/get/responses/200'
+`,
+    });
+  });
+
+  it('inlines the whole chain down to the terminal Response Object', async () => {
+    const result = await bundle({ specDir });
+    const entries = collectResponseEntries(
+      result.spec as Record<string, unknown>
+    );
+    const b200 = entries.find((e) => e.where === 'GET /b 200');
+    expect(b200?.response['$ref']).toBeUndefined();
+    expect(b200?.response['description']).toBe('B override.');
+    expect(b200?.response['content']).toEqual({
+      'text/plain': { schema: { type: 'string' } },
+    });
+    const c200 = entries.find((e) => e.where === 'GET /c 200');
+    expect(c200?.response['$ref']).toBeUndefined();
+    expect(c200?.response['description']).toBe('Terminal response.');
+    expect(c200?.response['content']).toEqual({
+      'text/plain': { schema: { type: 'string' } },
+    });
+    expect(result.stats.inlinedPathLocalResponseCount).toBe(2);
+  });
+
+  it('keeps a sibling description override through the chain', async () => {
+    specDir = fs.mkdtempSync(path.join(os.tmpdir(), 'bundler-response-chain-ov-'));
+    writeSpec(specDir, {
+      'rest-api.yaml': `openapi: '3.0.3'
+info:
+  title: Test API
+  version: '1.0.0'
+paths:
+  /a:
+    get:
+      operationId: opA
+      responses:
+        '200':
+          description: Terminal response.
+  /b:
+    get:
+      operationId: opB
+      responses:
+        '200':
+          $ref: '#/paths/~1a/get/responses/200'
+  /c:
+    get:
+      operationId: opC
+      responses:
+        '200':
+          $ref: '#/paths/~1b/get/responses/200'
+          description: C-specific override.
+`,
+    });
+    const result = await bundle({ specDir });
+    const entries = collectResponseEntries(
+      result.spec as Record<string, unknown>
+    );
+    const c200 = entries.find((e) => e.where === 'GET /c 200');
+    expect(c200?.response['$ref']).toBeUndefined();
+    expect(c200?.response['description']).toBe('C-specific override.');
+  });
+});
+
+/**
+ * With `dereferencePathLocalRefs` enabled, an aliased Path Item (`/c` →
+ * `/b`) is expanded from the snapshots taken before the inlining passes, so
+ * the copied reference inside it still carries the sibling `description`
+ * override — and naive expansion discards the override the inliner applied.
+ */
+describe('aliased Path Item with description overrides under dereferencing', () => {
+  let specDir: string;
+
+  beforeAll(() => {
+    specDir = fs.mkdtempSync(path.join(os.tmpdir(), 'bundler-alias-deref-'));
+    writeSpec(specDir, {
+      'rest-api.yaml': `openapi: '3.0.3'
+info:
+  title: Test API
+  version: '1.0.0'
+paths:
+  /a:
+    get:
+      operationId: opA
+      responses:
+        '200':
+          description: Shared description.
+          content:
+            text/plain:
+              schema:
+                type: string
+  /b:
+    get:
+      operationId: opB
+      responses:
+        '200':
+          $ref: '#/paths/~1a/get/responses/200'
+          description: B-specific description.
+  /c:
+    $ref: '#/paths/~1b'
+`,
+    });
+  });
+
+  it('preserves the response description override when expanding the alias', async () => {
+    const result = await bundle({ specDir, dereferencePathLocalRefs: true });
+    const spec = result.spec as Record<string, any>;
+    const c200 = spec.paths['/c'].get.responses['200'];
+    expect(c200['$ref']).toBeUndefined();
+    expect(c200['description']).toBe('B-specific description.');
+    expect(c200['content']).toEqual({
+      'text/plain': { schema: { type: 'string' } },
+    });
+  });
+});

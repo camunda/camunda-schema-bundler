@@ -433,3 +433,62 @@ paths:
     expect(result.stats.inlinedPathLocalParameterCount).toBe(0);
   });
 });
+
+/**
+ * With `dereferencePathLocalRefs` enabled, an aliased Path Item (`/c` →
+ * `/b`) is expanded from the snapshots taken before the inlining passes, so
+ * the copied parameter reference inside it still carries the sibling
+ * `description` override — and naive expansion discards the override the
+ * inliner applied. Mirror of the response-side aliasing regression.
+ */
+describe('aliased Path Item with a parameter description override under dereferencing', () => {
+  let specDir: string;
+
+  beforeAll(() => {
+    specDir = fs.mkdtempSync(path.join(os.tmpdir(), 'bundler-param-alias-deref-'));
+    fs.writeFileSync(
+      path.join(specDir, 'rest-api.yaml'),
+      `openapi: '3.0.3'
+info:
+  title: Test API
+  version: '1.0.0'
+paths:
+  /a:
+    get:
+      operationId: opA
+      parameters:
+        - name: alpha
+          in: query
+          required: false
+          description: Shared description.
+          schema:
+            type: string
+      responses:
+        '200':
+          description: OK
+  /b:
+    get:
+      operationId: opB
+      parameters:
+        - $ref: '#/paths/~1a/get/parameters/0'
+          description: B-specific description.
+      responses:
+        '200':
+          description: OK
+  /c:
+    $ref: '#/paths/~1b'
+`,
+      'utf8'
+    );
+  });
+
+  it('preserves the parameter description override when expanding the alias', async () => {
+    const result = await bundle({ specDir, dereferencePathLocalRefs: true });
+    const spec = result.spec as Record<string, any>;
+    const params = spec.paths['/c'].get.parameters;
+    expect(params).toHaveLength(1);
+    expect(params[0]['$ref']).toBeUndefined();
+    expect(params[0]['name']).toBe('alpha');
+    expect(params[0]['description']).toBe('B-specific description.');
+  });
+});
