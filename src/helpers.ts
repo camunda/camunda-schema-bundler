@@ -143,6 +143,40 @@ export function resolveInternalRef(
   return cur;
 }
 
+/**
+ * Follow a terminal hop: if `node` is itself an internal `$ref`, resolve that
+ * ref (against `snapshot` first, then `fallback`), repeating until the node
+ * is no longer a reference.
+ *
+ * The snapshots the inlining passes resolve against are taken before any
+ * inlining, so a ref whose target is another ref (an acyclic chain such as
+ * `/c` → `/b` → `/a`) still sees the intermediate reference. Without
+ * following the terminal hop the chain can never make progress and the
+ * survivor guard rejects it.
+ *
+ * Cycle-safe: a hop set bounds the walk, so a reference cycle terminates as
+ * `undefined` (the caller leaves the ref in place for the survivor guard)
+ * instead of recursing forever. A hop that cannot be resolved also
+ * terminates as `undefined`.
+ */
+export function resolveTerminalRef(
+  snapshot: Record<string, unknown>,
+  fallback: Record<string, unknown>,
+  node: unknown
+): unknown {
+  const hops = new Set<string>();
+  let cur = node;
+  while (cur && typeof cur === 'object' && !Array.isArray(cur)) {
+    const ref = (cur as Record<string, unknown>)['$ref'];
+    if (typeof ref !== 'string' || !ref.startsWith('#/')) break;
+    if (hops.has(ref)) return undefined; // reference cycle
+    hops.add(ref);
+    cur =
+      resolveInternalRef(snapshot, ref) ?? resolveInternalRef(fallback, ref);
+  }
+  return cur;
+}
+
 const COMPONENT_SCHEMA_REF = /^#\/components\/schemas\/([^/]+)$/;
 const COMPONENT_INTERIOR_SCHEMA_REF = /^#\/components\/schemas\/[^/]+\/./;
 
