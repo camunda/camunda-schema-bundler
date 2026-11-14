@@ -44,6 +44,7 @@
     "yaml": "^2.7.1"
   },
   "devDependencies": {
+    "@camunda8/spectral-cli": "6.16.1",
     "@commitlint/cli": "^20.4.1",
     "@commitlint/config-conventional": "^20.4.1",
     "@semantic-release/changelog": "^6.0.3",

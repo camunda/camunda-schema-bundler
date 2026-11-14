@@ -1,0 +1,37 @@
+openapi: '3.0.3'
+info:
+  title: Search Models
+  version: '1.0.0'
+paths: {}
+components:
+  parameters:
+    # Shared across operations and files: SwaggerParser drops
+    # components.parameters and dedupes reuses into path-local $refs.
+    KeyPathParam:
+      name: key
+      in: path
+      required: true
+      description: The resource key.
+      schema:
+        type: string
+    DryRunQueryParam:
+      name: dryRun
+      in: query
+      required: false
+      description: Validate only.
+      schema:
+        type: boolean
+  schemas:
+    SortOrderEnum:
+      type: string
+      enum: [ASC, DESC]
+    OffsetPagination:
+      type: object
+      properties:
+        from:
+          type: integer
+    SearchQueryRequest:
+      type: object
+      properties:
+        size:
+          type: integer
