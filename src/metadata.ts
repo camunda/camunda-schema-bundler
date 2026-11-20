@@ -483,11 +483,14 @@ function extractOperations(
             if (hasOptionalTenantId(schema, componentSchemas)) {
               optionalTenantIdInBody = true;
             }
-            for (const v of tenantIdVariants(rawSchema, schema, componentSchemas, operationId)) {
+            for (const v of tenantIdVariants(rawSchema, componentSchemas, operationId)) {
               if (!optionalTenantIdInBodyVariants.includes(v)) optionalTenantIdInBodyVariants.push(v);
             }
             if (
-              hasOptionalTenantId(schema, componentSchemas, 'tenantIds', 'optionalTenantIdsInBody')
+              // rawSchema, not the pre-resolved schema: OpenAPI 3.1 allows
+              // constraints beside a top-level $ref, and the strict walker
+              // follows the $ref while keeping those siblings.
+              hasOptionalTenantId(rawSchema, componentSchemas, 'tenantIds', 'optionalTenantIdsInBody')
             ) {
               optionalTenantIdsInBody = true;
             }
@@ -599,10 +602,12 @@ function extractOperations(
  */
 function tenantIdVariants(
   rawSchema: Record<string, unknown>,
-  schema: Record<string, unknown>,
   componentSchemas: Record<string, unknown>,
   operationId: string
 ): string[] {
+  // Evaluate the raw body schema so OpenAPI 3.1 constraints beside a
+  // top-level $ref (e.g. `{ $ref: ById, required: [tenantId] }`) still apply.
+  const schema = rawSchema;
   const refName = (s: Record<string, unknown>): string | undefined =>
     typeof s['$ref'] === 'string' ? decodeSchemaRefName(s['$ref'] as string) : undefined;
   const flag = 'optionalTenantIdInBodyVariants';
@@ -610,7 +615,14 @@ function tenantIdVariants(
   // only on the body schema itself, so `Alias -> U -> oneOf(...)` and
   // `allOf: [U, ...]` still list their qualifying variants.
   const unions = conjunctiveUnions(schema, componentSchemas, flag);
-  const direct = Array.isArray(schema['oneOf']) || Array.isArray(schema['anyOf']);
+  // A union is "direct" when it sits on the body schema or on the component
+  // its top-level $ref names; those branches are listed per variant.
+  const isUnion = (n: Record<string, unknown>) =>
+    Array.isArray(n['oneOf']) || Array.isArray(n['anyOf']);
+  const topRef = schema['$ref'];
+  const direct =
+    isUnion(schema) ||
+    (typeof topRef === 'string' && isUnion(followSchemaRef(topRef, [], componentSchemas, flag)));
   // An indirect union (behind an alias or inside allOf) whose every branch
   // qualifies makes the body itself qualify unconditionally: list the body.
   if (

@@ -145,3 +145,18 @@ describe('optionalTenantIdsInBody (#54)', () => {
     expect(op(schemas, ref('None')).optionalTenantIdsInBody).toBe(false);
   });
 });
+
+describe('OpenAPI 3.1 $ref sibling constraints (#54)', () => {
+  it('honours a required sibling beside a top-level $ref for variants', () => {
+    const schemas = { ById, ByKey, Instr: { oneOf: [ref('ById'), ref('ByKey')] } };
+    expect(op({ ById }, { ...ref('ById'), required: ['tenantId'] }).optionalTenantIdInBodyVariants).toEqual([]);
+    expect(op(schemas, { ...ref('Instr'), required: ['tenantId'] }).optionalTenantIdInBodyVariants).toEqual([]);
+    // A direct union reached via the top-level $ref is still listed per variant.
+    expect(op(schemas, { ...ref('Instr'), description: 'x' }).optionalTenantIdInBodyVariants).toEqual(['ById']);
+  });
+
+  it('honours a required sibling beside a top-level $ref for tenantIds', () => {
+    const schemas = { Act: { type: 'object', properties: { tenantIds: { type: 'array' } } } };
+    expect(op(schemas, { ...ref('Act'), required: ['tenantIds'] }).optionalTenantIdsInBody).toBe(false);
+  });
+});
