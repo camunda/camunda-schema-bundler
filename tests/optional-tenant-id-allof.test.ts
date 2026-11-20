@@ -342,13 +342,15 @@ describe('optionalTenantIdInBody through allOf (#47)', () => {
   it('is false when a union nested in allOf has a branch that requires tenantId', () => {
     const schemas = {
       Base,
+      // Named: a qualifying variant must have a component name (#54).
+      Opt: { type: 'object', properties: { tenantId: { type: 'string' } } },
       Req: {
         allOf: [
           ref('Base'),
           {
             oneOf: [
               { type: 'object', properties: { tenantId: { type: 'string' } }, required: ['tenantId'] },
-              { type: 'object', properties: { tenantId: { type: 'string' } } },
+              ref('Opt'),
             ],
           },
         ],
@@ -426,12 +428,14 @@ describe('optionalTenantIdInBody through allOf (#47)', () => {
   it('is false when a nested-union branch requires tenantId even with the union not last in allOf', () => {
     const schemas = {
       Base,
+      // Named: a qualifying variant must have a component name (#54).
+      Opt: { type: 'object', properties: { tenantId: { type: 'string' } } },
       Req: {
         allOf: [
           {
             oneOf: [
               { type: 'object', properties: { tenantId: { type: 'string' } }, required: ['tenantId'] },
-              { type: 'object', properties: { tenantId: { type: 'string' } } },
+              ref('Opt'),
             ],
           },
           ref('Base'),
@@ -464,45 +468,52 @@ describe('optionalTenantIdInBody through allOf (#47)', () => {
   // Sibling unions are independent choices: summarising them must not
   // enumerate the Cartesian product (2^40 combinations here), yet must stay
   // exhaustive — every branch is still validated.
+  // Named: a qualifying variant must have a component name (#54).
+  const Plain = { type: 'object' };
   const manyUnions = (n: number, last: Record<string, unknown>) => ({
     allOf: [
       ref('Base'),
       ...Array.from({ length: n - 1 }, () => ({
         oneOf: [{ type: 'object' }, { type: 'object' }],
       })),
-      { oneOf: [{ type: 'object' }, last] },
+      { oneOf: [ref('Plain'), last] },
     ],
   });
 
   it('evaluates many sibling unions without combinatorial blow-up', () => {
     const start = Date.now();
-    expect(optionalTenantIdInBody({ Base, Req: manyUnions(40, { type: 'object' }) }, 'Req')).toBe(true);
+    expect(optionalTenantIdInBody({ Base, Plain, Req: manyUnions(40, { type: 'object' }) }, 'Req')).toBe(true);
     // Generous bound: a safety net against exponential evaluation, not a timing assertion.
     expect(Date.now() - start).toBeLessThan(5000);
   });
 
   it('is false when the last of many sibling unions has a branch requiring tenantId', () => {
     expect(
-      optionalTenantIdInBody({ Base, Req: manyUnions(40, { required: ['tenantId'] }) }, 'Req')
+      optionalTenantIdInBody({ Base, Plain, Req: manyUnions(40, { required: ['tenantId'] }) }, 'Req')
     ).toBe(false);
   });
 
   it('throws on an unresolved $ref in the last of many sibling unions', () => {
     expect(() =>
-      optionalTenantIdInBody({ Base, Req: manyUnions(40, ref('Gone')) }, 'Req')
+      optionalTenantIdInBody({ Base, Plain, Req: manyUnions(40, ref('Gone')) }, 'Req')
     ).toThrow(/#\/components\/schemas\/Gone/);
   });
 
-  it('is false when tenantId is declared only in a branch of one of two sibling unions', () => {
+  it('throws when tenantId is declared only in a branch of each of two sibling unions', () => {
     const schemas = {
+      A: { type: 'object', properties: { tenantId: {} } },
+      B: { type: 'object', properties: { tenantId: {} } },
       Req: {
         allOf: [
-          { oneOf: [{ type: 'object', properties: { tenantId: {} } }, { type: 'object' }] },
-          { anyOf: [{ type: 'object' }, { type: 'object', properties: { tenantId: {} } }] },
+          { oneOf: [ref('A'), { type: 'object' }] },
+          { anyOf: [{ type: 'object' }, ref('B')] },
         ],
       },
     };
-    // Combination (second branch, first branch) never declares tenantId.
-    expect(optionalTenantIdInBody(schemas, 'Req')).toBe(false);
+    // optionalTenantIdInBody alone would be false (combination (second, first)
+    // never declares tenantId), but A and B each qualify under every
+    // combination of the other union: no single flat variant list exists, so
+    // extraction fails loudly (#54) rather than picking one.
+    expect(() => optionalTenantIdInBody(schemas, 'Req')).toThrow(/multiple unions/);
   });
 });

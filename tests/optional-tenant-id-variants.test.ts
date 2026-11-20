@@ -78,6 +78,54 @@ describe('optionalTenantIdInBodyVariants (#54)', () => {
   });
 });
 
+describe('optionalTenantIdInBodyVariants: decoding and indirect unions (#54)', () => {
+  it('returns decoded component names for encoded body and variant refs', () => {
+    const schemas = {
+      'Org/ById': ById,
+      'Base.Name': ById,
+      ByKey,
+      U: { oneOf: [{ $ref: '#/components/schemas/Org~1ById' }, ref('ByKey')] },
+    };
+    expect(op(schemas, ref('U')).optionalTenantIdInBodyVariants).toEqual(['Org/ById']);
+    expect(
+      op(schemas, { $ref: '#/components/schemas/Base%2EName' }).optionalTenantIdInBodyVariants
+    ).toEqual(['Base.Name']);
+  });
+
+  it('discovers a union behind a component alias', () => {
+    const schemas = { ById, ByKey, U: { oneOf: [ref('ById'), ref('ByKey')] }, Alias: ref('U') };
+    expect(op(schemas, ref('Alias')).optionalTenantIdInBodyVariants).toEqual(['ById']);
+  });
+
+  it('discovers a union inside allOf and keeps enclosing constraints', () => {
+    const schemas = {
+      ById,
+      ByKey,
+      U: { oneOf: [ref('ById'), ref('ByKey')] },
+      Comp: { allOf: [ref('U'), { type: 'object' }] },
+      CompReq: { allOf: [ref('U'), { required: ['tenantId'] }] },
+    };
+    expect(op(schemas, ref('Comp')).optionalTenantIdInBodyVariants).toEqual(['ById']);
+    expect(op(schemas, ref('CompReq')).optionalTenantIdInBodyVariants).toEqual([]);
+  });
+
+  it('lists the body itself when every branch of an indirect union qualifies', () => {
+    const schemas = { ById, U: { oneOf: [ref('ById')] }, Alias: ref('U') };
+    expect(op(schemas, ref('Alias')).optionalTenantIdInBodyVariants).toEqual(['Alias']);
+  });
+
+  it('throws when several unions each have a qualifying variant', () => {
+    const schemas = {
+      ById,
+      ByKey,
+      U: { oneOf: [ref('ById'), ref('ByKey')] },
+      V: { anyOf: [ref('ById'), ref('ByKey')] },
+      Both: { allOf: [ref('U'), ref('V')] },
+    };
+    expect(() => op(schemas, ref('Both'))).toThrow(/multiple unions/);
+  });
+});
+
 describe('optionalTenantIdsInBody (#54)', () => {
   it('is true for an optional tenantIds array (activateJobs shape)', () => {
     const schemas = {
