@@ -322,6 +322,17 @@ export interface OperationSummary {
   optionalTenantIdInBody: boolean;
 
   /**
+   * Request-body schema names that carry an optional top-level `tenantId`:
+   * union variant names (each evaluated under the wrapper's constraints), or
+   * the body schema itself for a non-union body. An SDK injects the default
+   * tenant whenever the body it sends is one of these. Empty when none.
+   */
+  optionalTenantIdInBodyVariants: string[];
+
+  /** Whether the request body has an optional `tenantIds` property (e.g. activateJobs). */
+  optionalTenantIdsInBody: boolean;
+
+  /**
    * Source YAML file the operation came from, relative to the spec dir.
    * Replaces the join previously required against `endpoint-map.json`.
    * Empty string when the source file is unknown (e.g. when `extractMetadata`

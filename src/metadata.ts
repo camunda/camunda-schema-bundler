@@ -424,6 +424,8 @@ function extractOperations(
       let requestBodyUnion = false;
       const requestBodyUnionRefs: string[] = [];
       let optionalTenantIdInBody = false;
+      const optionalTenantIdInBodyVariants: string[] = [];
+      let optionalTenantIdsInBody = false;
       const requestBodyContentTypes: string[] = [];
       let requestBodySchemaRef: string | undefined;
 
@@ -480,6 +482,14 @@ function extractOperations(
             // walked exactly once.
             if (hasOptionalTenantId(schema, componentSchemas)) {
               optionalTenantIdInBody = true;
+            }
+            for (const v of tenantIdVariants(rawSchema, schema, componentSchemas, operationId)) {
+              if (!optionalTenantIdInBodyVariants.includes(v)) optionalTenantIdInBodyVariants.push(v);
+            }
+            if (
+              hasOptionalTenantId(schema, componentSchemas, 'tenantIds', 'optionalTenantIdsInBody')
+            ) {
+              optionalTenantIdsInBody = true;
             }
           }
         }
@@ -554,6 +564,8 @@ function extractOperations(
         queryParams,
         requestBodyUnionRefs,
         optionalTenantIdInBody,
+        optionalTenantIdInBodyVariants,
+        optionalTenantIdsInBody,
         sourceFile,
         requestBodyContentTypes,
         requestBodySchemaRef,
@@ -574,6 +586,64 @@ function extractOperations(
   }
 
   return { eventuallyConsistentOps, operations };
+}
+
+/**
+ * Names of the request-body schemas that carry an optional top-level
+ * `tenantId`: for a union body, each `oneOf`/`anyOf` variant evaluated under
+ * the wrapper's own constraints; for a non-union body, the body schema itself.
+ *
+ * Throws when a schema that carries an optional `tenantId` has no component
+ * name (inline variant or inline body): it cannot be listed, and dropping it
+ * would silently skip default-tenant injection in the SDKs.
+ */
+function tenantIdVariants(
+  rawSchema: Record<string, unknown>,
+  schema: Record<string, unknown>,
+  componentSchemas: Record<string, unknown>,
+  operationId: string
+): string[] {
+  const refName = (s: Record<string, unknown>): string | undefined =>
+    typeof s['$ref'] === 'string' ? (s['$ref'] as string).split('/').pop() : undefined;
+  const flag = 'optionalTenantIdInBodyVariants';
+  const unionKey = Array.isArray(schema['oneOf'])
+    ? 'oneOf'
+    : Array.isArray(schema['anyOf'])
+      ? 'anyOf'
+      : undefined;
+  if (!unionKey) {
+    if (!hasOptionalTenantId(schema, componentSchemas, 'tenantId', flag)) return [];
+    const name = refName(rawSchema);
+    if (!name) {
+      throw new Error(
+        `Operation ${operationId}: inline request body carries an optional tenantId ` +
+          `but has no component schema name to list in ${flag}`
+      );
+    }
+    return [name];
+  }
+  const { [unionKey]: branches, ...wrapper } = schema;
+  const out: string[] = [];
+  for (const branch of branches as unknown[]) {
+    if (!branch || typeof branch !== 'object') {
+      throw new Error(
+        `Operation ${operationId}: request body ${unionKey} has a non-object variant ` +
+          `while computing ${flag}`
+      );
+    }
+    const b = branch as Record<string, unknown>;
+    const combined = { ...wrapper, allOf: [...((wrapper['allOf'] as unknown[]) ?? []), b] };
+    if (!hasOptionalTenantId(combined, componentSchemas, 'tenantId', flag)) continue;
+    const name = refName(b);
+    if (!name) {
+      throw new Error(
+        `Operation ${operationId}: inline ${unionKey} variant of the request body carries ` +
+          `an optional tenantId but has no component schema name to list in ${flag}`
+      );
+    }
+    out.push(name);
+  }
+  return out;
 }
 
 /** Resolve a single $ref to a component schema, or return the schema itself. */
@@ -630,14 +700,16 @@ function resolveComponentRef(
  */
 function hasOptionalTenantId(
   schema: Record<string, unknown>,
-  componentSchemas: Record<string, unknown>
+  componentSchemas: Record<string, unknown>,
+  prop: string = 'tenantId',
+  flag: string = 'optionalTenantIdInBody'
 ): boolean {
   const prefix = '#/components/schemas/';
 
   const follow = (ref: string, chain: string[]): Record<string, unknown> => {
     if (chain.includes(ref)) {
       throw new Error(
-        `Cyclic $ref chain while computing optionalTenantIdInBody: ` +
+        `Cyclic $ref chain while computing ${flag}: ` +
           `${[...chain, ref].join(' -> ')}`
       );
     }
@@ -661,7 +733,7 @@ function hasOptionalTenantId(
     if (!target || typeof target !== 'object') {
       throw new Error(
         `$ref ${ref} does not resolve to a component schema while ` +
-          `computing optionalTenantIdInBody (chain: ${[...chain, ref].join(' -> ')})`
+          `computing ${flag} (chain: ${[...chain, ref].join(' -> ')})`
       );
     }
     return target as Record<string, unknown>;
@@ -684,9 +756,9 @@ function hasOptionalTenantId(
   const collect = (node: Record<string, unknown>, chain: string[], acc: Acc): void => {
     if (node['type'] === 'object') acc.isObject = true;
     const props = node['properties'] as Record<string, unknown> | undefined;
-    if (props && props['tenantId']) acc.declared = true;
+    if (props && props[prop]) acc.declared = true;
     const req = node['required'];
-    if (Array.isArray(req) && req.includes('tenantId')) acc.required = true;
+    if (Array.isArray(req) && req.includes(prop)) acc.required = true;
 
     const ownRef = node['$ref'];
     if (typeof ownRef === 'string') {
