@@ -747,13 +747,12 @@ function conjunctiveUnions(
         if (m && typeof m === 'object') visit(m as Record<string, unknown>, chain);
       }
     }
-    const key = Array.isArray(node['oneOf'])
-      ? 'oneOf'
-      : Array.isArray(node['anyOf'])
-        ? 'anyOf'
-        : undefined;
-    if (key && !out.some((u) => u.branches === node[key])) {
-      out.push({ key, branches: node[key] as unknown[] });
+    // A schema may carry both `oneOf` and `anyOf`; both apply conjunctively.
+    for (const key of ['oneOf', 'anyOf'] as const) {
+      const arr = node[key];
+      if (Array.isArray(arr) && !out.some((u) => u.branches === arr)) {
+        out.push({ key, branches: arr });
+      }
     }
   };
   visit(schema, []);
@@ -855,8 +854,9 @@ function hasOptionalTenantId(
         }
       }
     }
-    const union = node['oneOf'] || node['anyOf'];
-    if (Array.isArray(union)) {
+    // Both `oneOf` and `anyOf` may appear on one schema; each constrains it.
+    for (const union of [node['oneOf'], node['anyOf']]) {
+      if (!Array.isArray(union)) continue;
       // A pinned union is evaluated for one chosen branch only (used to list
       // the qualifying variants); any other union is deferred as usual.
       if (pin && union === pin.branches) collect(pin.branch, chain, acc);

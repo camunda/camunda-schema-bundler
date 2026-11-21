@@ -160,3 +160,28 @@ describe('OpenAPI 3.1 $ref sibling constraints (#54)', () => {
     expect(op(schemas, { ...ref('Act'), required: ['tenantIds'] }).optionalTenantIdsInBody).toBe(false);
   });
 });
+
+describe('schemas with both oneOf and anyOf (#54)', () => {
+  it('applies anyOf constraints alongside oneOf when listing variants', () => {
+    const schemas = {
+      ById,
+      ByKey,
+      U: { oneOf: [ref('ById'), ref('ByKey')], anyOf: [{ required: ['tenantId'] }] },
+    };
+    expect(op(schemas, ref('U')).optionalTenantIdInBodyVariants).toEqual([]);
+  });
+
+  it('applies anyOf constraints alongside oneOf for tenantIds', () => {
+    const Act = {
+      type: 'object',
+      properties: { tenantIds: { type: 'array', items: { type: 'string' } } },
+    };
+    const schemas = {
+      Act,
+      Both: { oneOf: [ref('Act')], anyOf: [{ required: ['tenantIds'] }] },
+      Ok: { oneOf: [ref('Act')], anyOf: [{ type: 'object' }] },
+    };
+    expect(op(schemas, ref('Both')).optionalTenantIdsInBody).toBe(false);
+    expect(op(schemas, ref('Ok')).optionalTenantIdsInBody).toBe(true);
+  });
+});
