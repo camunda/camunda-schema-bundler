@@ -1,3 +1,10 @@
+## [2.5.1](https://github.com/camunda/camunda-schema-bundler/compare/v2.5.0...v2.5.1) (2026-11-21)
+
+
+### Bug Fixes
+
+* **metadata:** don't throw on inline request bodies with tenantId ([#58](https://github.com/camunda/camunda-schema-bundler/issues/58)) ([35f75b3](https://github.com/camunda/camunda-schema-bundler/commit/35f75b3c02e7506f51d0c780e97a812e8bbec879))
+
 # [2.5.0](https://github.com/camunda/camunda-schema-bundler/compare/v2.4.9...v2.5.0) (2026-11-21)
 
 
