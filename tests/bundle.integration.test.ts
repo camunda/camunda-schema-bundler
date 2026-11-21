@@ -39,6 +39,15 @@ describe.skipIf(!RUN_INTEGRATION)('bundle (integration)', () => {
     expect(pik!.flags.includesLongKeyRef).toBe(true);
   });
 
+  it('computes default-tenant metadata for the upstream spec (#54)', async () => {
+    // Regression: 2.5.0 threw on createDeployment's inline multipart body.
+    const result = await bundle({ specDir: SPEC_DIR });
+    const byId = (id: string) => result.metadata.operations.find((o) => o.operationId === id)!;
+    expect(byId('createDeployment').optionalTenantIdInBody).toBe(true);
+    expect(byId('createProcessInstance').optionalTenantIdInBodyVariants.length).toBeGreaterThan(0);
+    expect(byId('activateJobs').optionalTenantIdsInBody).toBe(true);
+  });
+
   it('detects eventually consistent operations', async () => {
     const result = await bundle({ specDir: SPEC_DIR });
     expect(result.metadata.eventuallyConsistentOps.length).toBeGreaterThan(0);

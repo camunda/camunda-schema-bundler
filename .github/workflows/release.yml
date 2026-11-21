@@ -42,6 +42,10 @@ jobs:
 
       - name: Test
         run: npm test
+        env:
+          # Also bundle the real upstream spec: synthetic fixtures missed
+          # createDeployment's inline body in 2.5.0.
+          CAMUNDA_BUNDLER_INTEGRATION: '1'
 
   publish:
     name: Version & Publish (${{ github.ref_name }})

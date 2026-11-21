@@ -324,8 +324,12 @@ export interface OperationSummary {
   /**
    * Request-body schema names that carry an optional top-level `tenantId`:
    * union variant names (each evaluated under the wrapper's constraints), or
-   * the body schema itself for a non-union body. An SDK injects the default
-   * tenant whenever the body it sends is one of these. Empty when none.
+   * the body schema itself for a non-union body with a component name. An
+   * inline body (no component name, e.g. createDeployment's multipart form)
+   * is not listed; `optionalTenantIdInBody` is true for it instead.
+   *
+   * An SDK injects the default tenant when `optionalTenantIdInBody` is true,
+   * or when the body it sends is one of these variants. Empty when none.
    */
   optionalTenantIdInBodyVariants: string[];
 
