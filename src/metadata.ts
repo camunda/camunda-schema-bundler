@@ -424,6 +424,8 @@ function extractOperations(
       let requestBodyUnion = false;
       const requestBodyUnionRefs: string[] = [];
       let optionalTenantIdInBody = false;
+      const optionalTenantIdInBodyVariants: string[] = [];
+      let optionalTenantIdsInBody = false;
       const requestBodyContentTypes: string[] = [];
       let requestBodySchemaRef: string | undefined;
 
@@ -480,6 +482,17 @@ function extractOperations(
             // walked exactly once.
             if (hasOptionalTenantId(schema, componentSchemas)) {
               optionalTenantIdInBody = true;
+            }
+            for (const v of tenantIdVariants(rawSchema, componentSchemas, operationId)) {
+              if (!optionalTenantIdInBodyVariants.includes(v)) optionalTenantIdInBodyVariants.push(v);
+            }
+            if (
+              // rawSchema, not the pre-resolved schema: OpenAPI 3.1 allows
+              // constraints beside a top-level $ref, and the strict walker
+              // follows the $ref while keeping those siblings.
+              hasOptionalTenantId(rawSchema, componentSchemas, 'tenantIds', 'optionalTenantIdsInBody')
+            ) {
+              optionalTenantIdsInBody = true;
             }
           }
         }
@@ -554,6 +567,8 @@ function extractOperations(
         queryParams,
         requestBodyUnionRefs,
         optionalTenantIdInBody,
+        optionalTenantIdInBodyVariants,
+        optionalTenantIdsInBody,
         sourceFile,
         requestBodyContentTypes,
         requestBodySchemaRef,
@@ -574,6 +589,174 @@ function extractOperations(
   }
 
   return { eventuallyConsistentOps, operations };
+}
+
+/**
+ * Names of the request-body schemas that carry an optional top-level
+ * `tenantId`: for a union body, each `oneOf`/`anyOf` variant evaluated under
+ * the wrapper's own constraints; for a non-union body, the body schema itself.
+ *
+ * Throws when a schema that carries an optional `tenantId` has no component
+ * name (inline variant or inline body): it cannot be listed, and dropping it
+ * would silently skip default-tenant injection in the SDKs.
+ */
+function tenantIdVariants(
+  rawSchema: Record<string, unknown>,
+  componentSchemas: Record<string, unknown>,
+  operationId: string
+): string[] {
+  // Evaluate the raw body schema so OpenAPI 3.1 constraints beside a
+  // top-level $ref (e.g. `{ $ref: ById, required: [tenantId] }`) still apply.
+  const schema = rawSchema;
+  const refName = (s: Record<string, unknown>): string | undefined =>
+    typeof s['$ref'] === 'string' ? decodeSchemaRefName(s['$ref'] as string) : undefined;
+  const flag = 'optionalTenantIdInBodyVariants';
+  // Unions are discovered through component aliases and `allOf` members, not
+  // only on the body schema itself, so `Alias -> U -> oneOf(...)` and
+  // `allOf: [U, ...]` still list their qualifying variants.
+  const unions = conjunctiveUnions(schema, componentSchemas, flag);
+  // A union is "direct" when it sits on the body schema or on the component
+  // its top-level $ref names; those branches are listed per variant.
+  const isUnion = (n: Record<string, unknown>) =>
+    Array.isArray(n['oneOf']) || Array.isArray(n['anyOf']);
+  const topRef = schema['$ref'];
+  const direct =
+    isUnion(schema) ||
+    (typeof topRef === 'string' && isUnion(followSchemaRef(topRef, [], componentSchemas, flag)));
+  // An indirect union (behind an alias or inside allOf) whose every branch
+  // qualifies makes the body itself qualify unconditionally: list the body.
+  if (
+    unions.length === 0 ||
+    (!direct && hasOptionalTenantId(schema, componentSchemas, 'tenantId', flag))
+  ) {
+    if (!hasOptionalTenantId(schema, componentSchemas, 'tenantId', flag)) return [];
+    const name = refName(rawSchema);
+    if (!name) {
+      throw new Error(
+        `Operation ${operationId}: inline request body carries an optional tenantId ` +
+          `but has no component schema name to list in ${flag}`
+      );
+    }
+    return [name];
+  }
+  const perUnion: string[][] = [];
+  for (const { key, branches } of unions) {
+    const out: string[] = [];
+    for (const branch of branches) {
+      if (!branch || typeof branch !== 'object') {
+        throw new Error(
+          `Operation ${operationId}: request body ${key} has a non-object variant ` +
+            `while computing ${flag}`
+        );
+      }
+      const b = branch as Record<string, unknown>;
+      // Evaluate the whole body with this union pinned to `b`: every
+      // enclosing constraint (wrapper, alias, allOf siblings) still applies.
+      const pin = { branches, branch: b };
+      if (!hasOptionalTenantId(schema, componentSchemas, 'tenantId', flag, pin)) continue;
+      const name = refName(b);
+      if (!name) {
+        throw new Error(
+          `Operation ${operationId}: inline ${key} variant of the request body carries ` +
+            `an optional tenantId but has no component schema name to list in ${flag}`
+        );
+      }
+      if (!out.includes(name)) out.push(name);
+    }
+    perUnion.push(out);
+  }
+  // Pinning one union's branch evaluates it under EVERY combination of the
+  // other unions, so a single union's qualifying set is sound on its own. When
+  // several unions each have qualifying variants a flat list is ambiguous.
+  const qualifying = perUnion.filter((o) => o.length > 0);
+  if (qualifying.length > 1) {
+    throw new Error(
+      `Operation ${operationId}: request body reaches multiple unions ` +
+        `(${unions.map((u) => u.key).join(', ')}) with variants carrying an optional ` +
+        `tenantId; cannot list a single variant set in ${flag}`
+    );
+  }
+  return qualifying[0] ?? [];
+}
+
+const SCHEMA_REF_PREFIX = '#/components/schemas/';
+
+/**
+ * Decode the component name of a `#/components/schemas/<name>` `$ref`.
+ * RFC 6901 §6: URI-decode the fragment FIRST, then unescape pointer tokens —
+ * so `Base%2EName` → `Base.Name`, `Org~1Schema` → `Org/Schema`, `%7E1` → `/`.
+ * Returns undefined for anything else (other buckets, interior pointers).
+ */
+function decodeSchemaRefName(ref: string): string | undefined {
+  if (!ref.startsWith(SCHEMA_REF_PREFIX)) return undefined;
+  const decoded = decodeURIComponent(ref.slice(SCHEMA_REF_PREFIX.length));
+  if (decoded.includes('/')) return undefined;
+  return decoded.replace(/~1/g, '/').replace(/~0/g, '~');
+}
+
+/**
+ * Resolve a `#/components/schemas/<name>` `$ref`, throwing on an unresolvable
+ * or interior pointer, or on a cyclic chain: either means the flag cannot be
+ * computed, and guessing would silently change SDK behaviour.
+ */
+function followSchemaRef(
+  ref: string,
+  chain: string[],
+  componentSchemas: Record<string, unknown>,
+  flag: string
+): Record<string, unknown> {
+  if (chain.includes(ref)) {
+    throw new Error(`Cyclic $ref chain while computing ${flag}: ${[...chain, ref].join(' -> ')}`);
+  }
+  const name = decodeSchemaRefName(ref);
+  const target = name !== undefined ? componentSchemas[name] : undefined;
+  if (!target || typeof target !== 'object') {
+    throw new Error(
+      `$ref ${ref} does not resolve to a component schema while ` +
+        `computing ${flag} (chain: ${[...chain, ref].join(' -> ')})`
+    );
+  }
+  return target as Record<string, unknown>;
+}
+
+interface ConjunctiveUnion {
+  key: 'oneOf' | 'anyOf';
+  branches: unknown[];
+}
+
+/**
+ * Every `oneOf`/`anyOf` array that applies conjunctively to `schema` — on the
+ * schema itself or reached through its `$ref` aliases and `allOf` members
+ * (not through union branches). Arrays are returned by identity so they can
+ * be pinned in `hasOptionalTenantId`.
+ */
+function conjunctiveUnions(
+  schema: Record<string, unknown>,
+  componentSchemas: Record<string, unknown>,
+  flag: string
+): ConjunctiveUnion[] {
+  const out: ConjunctiveUnion[] = [];
+  const visit = (node: Record<string, unknown>, chain: string[]): void => {
+    const ownRef = node['$ref'];
+    if (typeof ownRef === 'string') {
+      visit(followSchemaRef(ownRef, chain, componentSchemas, flag), [...chain, ownRef]);
+    }
+    const allOf = node['allOf'];
+    if (Array.isArray(allOf)) {
+      for (const m of allOf) {
+        if (m && typeof m === 'object') visit(m as Record<string, unknown>, chain);
+      }
+    }
+    // A schema may carry both `oneOf` and `anyOf`; both apply conjunctively.
+    for (const key of ['oneOf', 'anyOf'] as const) {
+      const arr = node[key];
+      if (Array.isArray(arr) && !out.some((u) => u.branches === arr)) {
+        out.push({ key, branches: arr });
+      }
+    }
+  };
+  visit(schema, []);
+  return out;
 }
 
 /** Resolve a single $ref to a component schema, or return the schema itself. */
@@ -630,42 +813,13 @@ function resolveComponentRef(
  */
 function hasOptionalTenantId(
   schema: Record<string, unknown>,
-  componentSchemas: Record<string, unknown>
+  componentSchemas: Record<string, unknown>,
+  prop: string = 'tenantId',
+  flag: string = 'optionalTenantIdInBody',
+  pin?: { branches: unknown[]; branch: Record<string, unknown> }
 ): boolean {
-  const prefix = '#/components/schemas/';
-
-  const follow = (ref: string, chain: string[]): Record<string, unknown> => {
-    if (chain.includes(ref)) {
-      throw new Error(
-        `Cyclic $ref chain while computing optionalTenantIdInBody: ` +
-          `${[...chain, ref].join(' -> ')}`
-      );
-    }
-    // Only `#/components/schemas/<name>` is resolvable here. The name segment
-    // may be URI-encoded and carry JSON Pointer escapes (RFC 6901: `~0` = `~`,
-    // `~1` = `/`), so decode both before lookup — `Base%2EName` targets
-    // `Base.Name`, `Base~0Name` targets `Base~Name`. Reject anything with
-    // further path segments rather than silently matching on the last one: an
-    // interior pointer means the flag cannot be computed, and guessing would
-    // silently change SDK behaviour.
-    const rest = ref.startsWith(prefix) ? ref.slice(prefix.length) : undefined;
-    // RFC 6901 §6: URI-decode the fragment FIRST, then split on `/` and
-    // unescape pointer tokens — so `%7E1` is `~1` → `/`, and `%2F` is a
-    // segment separator (an interior pointer, rejected).
-    const decoded = rest !== undefined ? decodeURIComponent(rest) : undefined;
-    const name =
-      decoded !== undefined && !decoded.includes('/')
-        ? decoded.replace(/~1/g, '/').replace(/~0/g, '~')
-        : undefined;
-    const target = name !== undefined ? componentSchemas[name] : undefined;
-    if (!target || typeof target !== 'object') {
-      throw new Error(
-        `$ref ${ref} does not resolve to a component schema while ` +
-          `computing optionalTenantIdInBody (chain: ${[...chain, ref].join(' -> ')})`
-      );
-    }
-    return target as Record<string, unknown>;
-  };
+  const follow = (ref: string, chain: string[]) =>
+    followSchemaRef(ref, chain, componentSchemas, flag);
 
   /**
    * Conjunctive collection: accumulate what `node` and everything that applies
@@ -684,9 +838,9 @@ function hasOptionalTenantId(
   const collect = (node: Record<string, unknown>, chain: string[], acc: Acc): void => {
     if (node['type'] === 'object') acc.isObject = true;
     const props = node['properties'] as Record<string, unknown> | undefined;
-    if (props && props['tenantId']) acc.declared = true;
+    if (props && props[prop]) acc.declared = true;
     const req = node['required'];
-    if (Array.isArray(req) && req.includes('tenantId')) acc.required = true;
+    if (Array.isArray(req) && req.includes(prop)) acc.required = true;
 
     const ownRef = node['$ref'];
     if (typeof ownRef === 'string') {
@@ -700,8 +854,14 @@ function hasOptionalTenantId(
         }
       }
     }
-    const union = node['oneOf'] || node['anyOf'];
-    if (Array.isArray(union)) acc.unions.push({ branches: union, chain });
+    // Both `oneOf` and `anyOf` may appear on one schema; each constrains it.
+    for (const union of [node['oneOf'], node['anyOf']]) {
+      if (!Array.isArray(union)) continue;
+      // A pinned union is evaluated for one chosen branch only (used to list
+      // the qualifying variants); any other union is deferred as usual.
+      if (pin && union === pin.branches) collect(pin.branch, chain, acc);
+      else acc.unions.push({ branches: union, chain });
+    }
   };
 
   /**
