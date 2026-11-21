@@ -1,3 +1,10 @@
+# [2.5.0](https://github.com/camunda/camunda-schema-bundler/compare/v2.4.9...v2.5.0) (2026-11-21)
+
+
+### Features
+
+* **metadata:** add optionalTenantIdInBodyVariants and optionalTenantIdsInBody ([#55](https://github.com/camunda/camunda-schema-bundler/issues/55)) ([8efece5](https://github.com/camunda/camunda-schema-bundler/commit/8efece57a85dbccf0c52d03032a88462e403a4c7)), closes [#54](https://github.com/camunda/camunda-schema-bundler/issues/54) [#47](https://github.com/camunda/camunda-schema-bundler/issues/47)
+
 ## [2.4.9](https://github.com/camunda/camunda-schema-bundler/compare/v2.4.8...v2.4.9) (2026-11-14)
 
 
