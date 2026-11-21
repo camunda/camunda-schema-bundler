@@ -631,13 +631,11 @@ function tenantIdVariants(
   ) {
     if (!hasOptionalTenantId(schema, componentSchemas, 'tenantId', flag)) return [];
     const name = refName(rawSchema);
-    if (!name) {
-      throw new Error(
-        `Operation ${operationId}: inline request body carries an optional tenantId ` +
-          `but has no component schema name to list in ${flag}`
-      );
-    }
-    return [name];
+    // An inline body (e.g. createDeployment's multipart form) has no schema
+    // name to list. It needs none: the body qualifies unconditionally, which
+    // optionalTenantIdInBody already reports, so SDKs inject on that flag.
+    // Names are only needed to tell union variants apart.
+    return name ? [name] : [];
   }
   const perUnion: string[][] = [];
   for (const { key, branches } of unions) {

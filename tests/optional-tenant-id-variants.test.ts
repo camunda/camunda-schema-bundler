@@ -73,8 +73,44 @@ describe('optionalTenantIdInBodyVariants (#54)', () => {
     expect(() => op(schemas, ref('Instr'))).toThrow(/inline oneOf variant/);
   });
 
-  it('throws when an inline body carries an optional tenantId', () => {
-    expect(() => op({}, ById)).toThrow(/inline request body/);
+  it('lists nothing for an inline body but flags it via optionalTenantIdInBody', () => {
+    const o = op({}, ById);
+    expect(o.optionalTenantIdInBodyVariants).toEqual([]);
+    expect(o.optionalTenantIdInBody).toBe(true);
+  });
+
+  it('handles an inline multipart body with tenantId (createDeployment shape)', () => {
+    const spec = {
+      openapi: '3.0.3',
+      paths: {
+        '/deployments': {
+          post: {
+            operationId: 'createDeployment',
+            requestBody: {
+              content: {
+                'multipart/form-data': {
+                  schema: {
+                    type: 'object',
+                    required: ['resources'],
+                    properties: {
+                      resources: { type: 'array', items: { type: 'string', format: 'binary' } },
+                      tenantId: { type: 'string' },
+                    },
+                  },
+                },
+              },
+            },
+            responses: { '200': { description: 'OK' } },
+          },
+        },
+      },
+      components: { schemas: {} },
+    };
+    const o = extractMetadata(spec, {}, 'sha256:test').operations.find(
+      (x) => x.operationId === 'createDeployment'
+    )!;
+    expect(o.optionalTenantIdInBody).toBe(true);
+    expect(o.optionalTenantIdInBodyVariants).toEqual([]);
   });
 });
 
