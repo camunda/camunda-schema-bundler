@@ -52,9 +52,39 @@ jobs:
     needs: test
     runs-on: ubuntu-latest
     steps:
+      # semantic-release pushes the release commit and tag straight to main. Once
+      # the "Require CI" ruleset is enabled, GITHUB_TOKEN can't get past it (the
+      # GitHub Actions app can't be a bypass actor), so the push is made as
+      # camunda-sdk-automation, which can be. Same pattern as the SDK repos.
+      # The release commit carries [skip ci] (release.config.cjs), because pushes
+      # made with an app token trigger workflows again.
+      - name: Import secrets
+        id: secrets
+        uses: hashicorp/vault-action@v4.0.0
+        with:
+          url: ${{ secrets.VAULT_ADDR }}
+          method: jwt
+          path: ${{ secrets.VAULT_JWT_PATH }}
+          role: ${{ secrets.VAULT_JWT_ROLE }}
+          jwtGithubAudience: ${{ secrets.VAULT_JWT_AUDIENCE }}
+          exportEnv: false
+          secrets: |
+            secret/data/products/agentic-experience/github.com/apps/camunda/camunda-sdk-automation GITHUB_APP_ID | APP_ID ;
+            secret/data/products/agentic-experience/github.com/apps/camunda/camunda-sdk-automation GITHUB_APP_PRIVATE_KEY | APP_PRIVATE_KEY ;
+
+      - name: Generate GitHub App token
+        id: app-token
+        uses: actions/create-github-app-token@v3
+        with:
+          app-id: ${{ steps.secrets.outputs.APP_ID }}
+          private-key: ${{ steps.secrets.outputs.APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
+          token: ${{ steps.app-token.outputs.token }}
 
       - name: Fetch remote refs for semantic-release
         run: |
@@ -77,7 +107,7 @@ jobs:
       - name: Publish (semantic-release)
         id: release
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
           # TODO: Enable provenance once the repo is public
           # NPM_CONFIG_PROVENANCE: true
         run: |
